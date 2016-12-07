@@ -1,0 +1,2 @@
+#!/bin/sh
+fdupes -r ${@:-.} | sed -e '/^#/d;/^$/d;s/[ &]/\\&/g;s/^.*$/#rm &/' > foo.sh && echo "Now uncomment the lines to be deleted"

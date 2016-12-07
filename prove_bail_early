@@ -1,0 +1,4 @@
+#!/bin/sh -e
+# reference:
+# https://github.com/Test-More/test-more/pull/319#issuecomment-6266048
+BAIL_ON_FAIL=1 PERL5OPT="-MTest::Most" prove "$@"

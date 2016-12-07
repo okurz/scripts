@@ -1,0 +1,9 @@
+#!/bin/sh -e
+zp_opts="${zp_opts:-""}"
+zp ${zp_opts} dup --no-allow-vendor-change "$@"
+
+# openqa packages will reset permissions. To use my custom group I need to set
+# this properly every time an update of openQA or os-autoinst is done.
+if [ -d /var/lib/openqa/factory ]; then
+    sudo chown -R .openqa /var/lib/openqa/factory/ && sudo chmod -R g+rwX /var/lib/openqa/factory/
+fi

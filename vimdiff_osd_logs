@@ -1,0 +1,6 @@
+#!/bin/sh -e
+testurl="${testurl:-"https://openqa.suse.de/tests/"}"
+t1="${1:?"Need job nr of first test"}"
+t2="${2:?"Need job nr of second test"}"
+vimdiff ${testurl}{$t1,$t2}/file/autoinst-log.txt -c ':s/^[0-9]*:[0-9]*:[0-9.]* [0-9]* //'
+# hint: use 's/^[0-9]*:[0-9]*:[0-9.]* [0-9]* //' to delete leading timestamp and call :rediff in vimdiff

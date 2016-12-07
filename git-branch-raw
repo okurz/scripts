@@ -1,0 +1,2 @@
+#!/bin/sh -e
+git branch "$@" | sed -e 's/[ *]*//' -e 's/ ->.*$//' | grep -v "\(no branch\|no_rebase\|HEAD detached\)"

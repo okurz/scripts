@@ -1,0 +1,8 @@
+#!/bin/sh -e
+old="${1:?"need old build id"}"
+new="${2:?"need new build id"}"
+base="${3:?"need base, e.g. 'Beta1', 'RC1'"}"
+arch="${arch:-"x86_64"}"
+version="${version:-"12-SP2"}"
+product="${product:-"Server"}"
+vimdiff http://xcdchk.suse.de/browser/data/SLE-${version}-${product}/Build${old}/${arch}/ChangeLog-${base}-Build${old}.txt http://xcdchk.suse.de/browser/data/SLE-${version}-${product}/Build${new}/${arch}/ChangeLog-${base}-Build${new}.txt

@@ -1,0 +1,6 @@
+# it's possible to watch on all these events but then new files created, e.g.
+# swap file will trigger calls as well as on temporary changes to files when
+# they are actually not ready to be executed so better just use "close_write"
+# to reduce the calls
+#while inotifywait -q -r -e close_write,moved_to,create . ; do "$@" ; done
+while inotifywait -q -r -e close_write,moved_to . ; do "$@" ; done

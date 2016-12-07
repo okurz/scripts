@@ -1,0 +1,15 @@
+#!/bin/sh
+
+git branch -a | grep -q gerrit/master
+if [ $? = 0 ]; then
+    default_rebase_target=gerrit/master
+else
+    default_rebase_target=origin/master
+fi
+
+rebase_target="${rebase_target:-${1:-"$default_rebase_target"}}"
+
+for i in $(git branch-raw | grep -v no_rebase) ; do
+    git checkout $i && git rebase --rerere-autoupdate $rebase_target || break
+done
+

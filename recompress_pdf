@@ -1,0 +1,11 @@
+#!/bin/sh
+if [ $# = 2 ]; then
+    pdf2ps "$1" - | ps2pdf - "$2"
+elif [ $# = 1 ]; then
+    pdf2ps "$1" - > .tmp.ps && cat .tmp.ps | ps2pdf - "$1"
+    rm .tmp.ps
+else
+    echo "input and output needed OR only input (will be overwritten)"
+    exit 1
+fi
+

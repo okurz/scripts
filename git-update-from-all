@@ -1,0 +1,4 @@
+#!/bin/sh -e
+git remote update
+git rebase-all-branches
+git delete-no-content-branches

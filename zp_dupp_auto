@@ -1,0 +1,1 @@
+env zp_opts="--non-interactive --quiet" zp_dupp "$@"

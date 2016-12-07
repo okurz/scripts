@@ -1,0 +1,7 @@
+#!/bin/bash -e
+old="${1:?"need old build id"}"
+new="${2:?"need new build id"}"
+arch="${arch:-"x86_64"}"
+version="${version:-"12-SP3"}"
+product="${product:-"Server"}"
+vimdiff <(curl -s ftp://openqa.suse.de/SLE-${version}-${product}-DVD-${arch}-Build${old}-Media1/ChangeLog) <(curl -s ftp://openqa.suse.de/SLE-${version}-${product}-DVD-${arch}-Build${new}-Media1/ChangeLog)

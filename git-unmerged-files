@@ -1,0 +1,1 @@
+LC_ALL=C git status | sed -n '/^.*\(Unmerged paths\|Changes not staged for commit\):/,/^.*Untracked/s/^.*both \(modified\|added\): *//p'

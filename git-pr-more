@@ -1,0 +1,6 @@
+#!/bin/sh -e
+target="${target:-"$USER"}"
+subject="${1:?"Need PR subject line"}"
+branch=$(git rev-parse --abbrev-ref HEAD)
+git push $target --force $branch && (echo -e "$subject\n\n" && \
+git log --pretty='* %s' origin/master..) | hub pull-request -F -

@@ -1,0 +1,136 @@
+#!/bin/sh
+
+# Format this as a manpage with `perldoc xsudo`.
+: <<'=cut'
+
+=head1 NAME
+
+B<xsudo> - Forward X11 authentication tokens to programs run under sudo
+
+=head1 SYNOPSIS
+
+B<xsudo> I<sudo-arguments> ...
+
+=head1 DESCRIPTION
+
+Running X Window programs as a different user with sudo generally
+doesn't work because the target user can't authenticate with the X11
+server.
+
+This program copies your authorisation token into a temporary file
+readable by the target user.  Call it in place of sudo.
+
+In addition, you need to make sure that the DISPLAY and XAUTHORITY
+environment variables are passed to the program run by sudo.  See the
+C<env_keep> option in L<sudoers(5)> if you find that this is not the
+case.
+
+=cut
+
+# If /bin/sh isn't Korn shell or Bash, switch:
+if type [[ >/dev/null 2>&1; then
+    :
+else
+    for better_shell in ksh bash; do
+        better_shell_path=`command -v $better_shell`
+        if [ -x "$better_shell_path" ]; then
+            exec $better_shell $0 "$@"
+        fi
+    done
+    echo "Korn or Bash shell required."
+    exit 2
+fi
+
+set -o errexit
+set -o nounset
+
+function make_file_readable_by_user_posix {
+    setfacl -m "u:$2:rw-" $1
+}
+
+function make_file_readable_by_user_nfsv4 {
+    chmod "A+user:$2:read_data:allow" $1
+}
+
+
+case `uname -s` in
+SunOS)
+    # /tmp is typically tmpfs on Solaris, which does not support ACLs.
+    export TMPDIR=${TMPDIR:-/var/tmp}
+
+    # Use the appropriate ACL type for the filesystem:
+    function make_file_readable_by_user {
+        if [[ $(echo $(df -n $auth_filename | cut -d: -f 2)) == 'zfs' ]]; then
+            make_file_readable_by_user_nfsv4 "$@"
+        else
+            make_file_readable_by_user_posix "$@"
+        fi
+    }
+    ;;
+*)
+    function make_file_readable_by_user {
+        make_file_readable_by_user_posix "$@"
+    }
+    ;;
+esac
+
+
+# Munge $DISPLAY into a form understood by xauth:
+if [[ $DISPLAY = localhost:* ]]; then
+    xauth_display=unix:${DISPLAY#localhost:}
+fi
+
+# Create a new X authority file containing just the relevant token:
+auth_filename=`mktemp -t xsudo.XXXXXX`
+xauth extract - ${xauth_display:-$DISPLAY} | xauth -f $auth_filename merge -
+export XAUTHORITY=$auth_filename
+
+# Figure out the target sudo user:
+sudo_user=root
+while getopts ':u:' OPT; do
+    case $OPT in
+    u)
+	sudo_user=$OPTARG
+	break
+	;;
+    esac
+done
+
+# Allow the target user to access the new authority file:
+make_file_readable_by_user $auth_filename $sudo_user
+
+# Hand over to sudo:
+exec sudo "$@"
+
+: <<'=cut'
+
+=head1 AUTHOR
+
+Peter Oliver
+
+=head1 BUGS
+
+See L<https://github.com/mavit/xsudo/issues>.
+
+=head1 LICENCE
+
+Copyright 2012, Peter Oliver.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+=head1 SEE ALSO
+
+L<https://github.com/mavit/xsudo>, L<sudo(1)>, L<xauth(1)>.
+
+=cut

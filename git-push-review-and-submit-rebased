@@ -1,0 +1,21 @@
+#!/bin/sh -e
+# push a commit for review and directly mark it as verified and code-reviewed
+# with comment "Rebased" and submit for simple commit rebasing to submit
+#
+git push-review && for i in $(git log --format=format:'%H' gerrit/master..) ; do ssh gerrit gerrit review --verified=+1 --code-review=+2 -m '"Rebased"' --submit $i ; done
+
+# This was the old approach but it just submits the most recent commit, not
+# all that are missing
+#git push-review && ssh gerrit gerrit review --verified=+1 --code-review=+2 -m '"Rebased"' --submit  $(git log --pretty=oneline HEAD^.. | sed 's/ .*$//')
+
+# this is another idea:
+# Don't rely on being called on a git repository but directly work on the
+# remote repository on the last open change
+#
+# it is not really safe as it connects directly after pushing to gerrit and
+# asks for the last change pushed.
+#
+# TODO add safety check to see if the last open change is really the commit
+# we pushed
+#
+#ssh gerrit gerrit review --verified=+1 --code-review=+2 -m '"Rebased"' $(ssh gerrit gerrit query --current-patch-set limit:1 is:open | sed -n 's/^.*revision: //p')

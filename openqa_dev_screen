@@ -1,0 +1,44 @@
+#!/bin/sh -e
+
+name="${name:-"openqa_dev_screen"}"
+config=${config:-"$HOME/.${name}rc"}
+
+export IGNOREEOF=1 
+
+[ -f $config ] || cat - > $config << 'EOF'
+unsetenv DISPLAY
+autodetach            on              # default: on
+crlf                  off             # default: off
+deflogin              off             # default: on
+hardcopy_append       off             # default: off
+startup_message       off             # default: on
+vbell                 on
+termcapinfo xterm* ti@:te@
+defscrollback         8000            # default: 100
+shell                 bash
+caption always "%{+b rk}%H%{gk} |%c %{yk}%d.%m.%Y | %{bk} %?%-Lw%?%{bw}%n*%f %t%?(%u)%?%{wk}%?%+Lw%? | %{rk} Load: %l %{wk}"
+sorendition 10 99 # default!
+activity              "activity in %n (%t) [%w:%s]~"
+bell                  "bell     in %n (%t) [%w:%s]~"
+pow_detach_msg "Screen session of \$LOGNAME \$:cr:\$:nl:ended."
+vbell_msg             " *beep* "
+
+# prevent finished commands closing the window
+zombie zr
+
+# http://superuser.com/questions/303140/i-would-like-to-write-a-shell-script-rc-file-that-automates-gnu-screen-splits-an?rq=1
+
+sessionname openqa_dev_screen
+
+screen -t oq-wu bash -c 'cd /local/openQA && sudo -u geekotest script/openqa daemon; exec bash'
+screen -t oq-sd bash -c 'cd /local/openQA && sudo -u geekotest script/openqa-scheduler; exec bash'
+screen -t oq-ws bash -c 'cd /local/openQA && sudo -u geekotest script/openqa-websockets; exec bash'
+screen -t oq-w-oqa bash -c 'cd /local/openQA && sudo -u _openqa-worker nice -n 4 ./script/worker --instance 9 --isotovideo /local/os-autoinst/isotovideo --verbose --no-cleanup; exec bash'
+screen -t oq-w-tw bash -c 'cd /local/openQA && sudo -u _openqa-worker nice -n 4 ./script/worker --instance 11 --isotovideo /local/os-autoinst/isotovideo --verbose --no-cleanup; exec bash'
+screen -t oq-w-sle bash -c 'cd /local/openQA && sudo -u _openqa-worker nice -n 4 ./script/worker --instance 10 --isotovideo /local/os-autoinst/isotovideo --verbose --no-cleanup; exec bash'
+screen -t tests bash -c '/local/os-autoinst-distri-opensuse/ ; exec bash'
+screen -t oq-w-zvm bash -c 'cd /local/openQA && sudo -u _openqa-worker nice -n 4 ./script/worker --instance 34 --isotovideo /local/os-autoinst/isotovideo --verbose; exec bash'
+screen -t client bash -c '/local/os-autoinst-distri-opensuse/ ; exec bash'
+EOF
+
+screen -S $name -c $config

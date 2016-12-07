@@ -1,0 +1,5 @@
+#!/bin/sh -e
+infile="${1:?"Need input filename, e.g. png or jpg file"}"
+infile_base=$(basename $infile)
+tmpfile=/tmp/${infile_base%.*}.ppm
+convert $infile $tmpfile ; gocr $tmpfile

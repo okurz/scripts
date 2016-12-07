@@ -1,0 +1,2 @@
+export AUTOSSH_POLL=20
+autossh -M 0 -o ServerAliveInterval=15 $*

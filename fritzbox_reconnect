@@ -1,0 +1,3 @@
+#!/bin/sh
+ssh root@fritz.box "/sbin/dsld -s ; /sbin/dsld -n"
+

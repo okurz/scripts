@@ -1,0 +1,4 @@
+#!/bin/sh -e
+brightness="${1:-"90"}"
+echo $brightness | sudo tee /sys/class/backlight/intel_backlight/brightness >/dev/null
+

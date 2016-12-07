@@ -1,0 +1,4 @@
+#!/bin/sh -e
+branch="${1:?"Need a git branch to review"}"
+base="${2:-""}"
+git log --reverse -p $base..$branch
