@@ -1,0 +1,8 @@
+#!/usr/bin/env python
+import requests
+import subprocess
+r = requests.get('http://openqa.suse.de/api/v1/jobs?result=softfailed&latest=1&scope=relevant&build=0192')
+jobs = r.json()['jobs']
+jobs_with_yast2_snapper_failed = [j for j in jobs if [m for m in j['modules'] if m['name'] == 'yast2_snapper' and m['result'] == 'failed']]
+[subprocess.call(['openqa_client_osd', 'jobs/%s/comments' % id, 'post', 'text=poo#15410']) for id in [j['id'] for j in jobs_with_yast2_snapper_failed]]
+[subprocess.call(['openqa_client_osd', 'jobs/%s/restart' % id, 'post']) for id in [j['id'] for j in jobs_with_yast2_snapper_failed]]
