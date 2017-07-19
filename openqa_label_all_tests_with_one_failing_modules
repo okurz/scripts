@@ -1,10 +1,17 @@
 #!/usr/bin/env python
+# Python 2 and 3: easiest option
+# see http://python-future.org/compatible_idioms.html
+from __future__ import absolute_import
+from future.standard_library import install_aliases  # isort:skip to keep 'install_aliases()'
+install_aliases()
+
 import argparse
 import json
 import logging
 import requests
 import subprocess
 import sys
+from urllib.parse import urljoin
 
 logging.basicConfig()
 log = logging.getLogger(sys.argv[0] if __name__ == "__main__" else __name__)
@@ -59,7 +66,7 @@ def main():
         return call(openqa_cmd + cmds, args.dry_run)
 
     log.debug("args: %s" % args)
-    r = requests.get('http://openqa.suse.de/api/v1/jobs?result=%s&latest=1&scope=relevant&build=%s' % (args.result, args.build))
+    r = requests.get(urljoin(args.openqa_host, 'api/v1/jobs?result=%s&latest=1&scope=relevant&build=%s' % (args.result, args.build)))
     jobs = r.json()['jobs']
     jobs_with_failed_module = [j for j in jobs if [m for m in j['modules'] if m['name'] == args.module and m['result'] == args.result]]
     def comments(job):
