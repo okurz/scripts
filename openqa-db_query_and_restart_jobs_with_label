@@ -1,0 +1,1 @@
+for i in $(ssh osd "sudo -u geekotest psql -t --command=\"select array_to_string(ARRAY(select job_id from comments where text like '%poo#19322%'), ' ');\" openqa") ; do openqa_client_osd jobs/$i/restart post ; done

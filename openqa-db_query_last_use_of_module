@@ -1,0 +1,68 @@
+#!/usr/bin/env python
+
+"""
+Helper script to find where a test module I want to change has been run last
+
+As a test developer I would like to know where the test module I want to
+change is triggered so that I could identify good candidates for validation
+acceptance criteria.
+"""
+
+# Python 2 and 3: easiest option
+# see http://python-future.org/compatible_idioms.html
+from __future__ import absolute_import
+from future.standard_library import install_aliases  # isort:skip to keep 'install_aliases()'
+install_aliases()
+
+import argparse
+import logging
+import subprocess
+import sys
+
+logging.basicConfig()
+log = logging.getLogger(sys.argv[0] if __name__ == "__main__" else __name__)
+
+
+class CustomFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    """Preserve multi-line __doc__ and provide default arguments in help strings."""
+    pass
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=CustomFormatter)
+    parser.add_argument('-v', '--verbose',
+                        help="Increase verbosity level, specify multiple times to increase verbosity", action='count', default=1)
+    parser.add_argument('--openqa-host', default="openqa.opensuse.org",
+                        help="The openQA host to act on")
+    parser.add_argument('--module',
+                        help="The failing module to look for")
+    parser.add_argument('--dry-run', action='store_true',
+                        help="Do not do any action on the host")
+    args = parser.parse_args()
+    verbose_to_log = {
+        0: logging.CRITICAL,
+        1: logging.ERROR,
+        2: logging.WARN,
+        3: logging.INFO,
+        4: logging.DEBUG
+    }
+    logging_level = logging.DEBUG if args.verbose > 4 else verbose_to_log[args.verbose]
+    log.setLevel(logging_level)
+    return args
+
+
+def call(cmds, dry_run=False):
+    log.debug("call: %s" % cmds)
+    return subprocess.call((['echo', 'Simulating: '] if dry_run else []) + cmds)
+
+
+def main():
+    args = parse_args()
+    limit=30
+    age='90 days'
+    sql_query = 'select distinct distri,version,flavor,test,arch,machine from jobs where id in (select job_id from job_modules where (name=\'{module}\')and t_updated > now() - interval \'{age}\') limit {limit};'.format(module=args.module, limit=limit, age=age)
+    call(['ssh', args.openqa_host] + ['sudo -u geekotest psql -t --command="{sql_query}" openqa'.format(sql_query=sql_query)], args.dry_run)
+
+
+if __name__ == "__main__":
+    main()
