@@ -5,3 +5,4 @@ arch="${arch:-"x86_64"}"
 version="${version:-"12-SP3"}"
 product="${product:-"Server"}"
 diff -Naur <(curl -s ftp://openqa.suse.de/SLE-${version}-${product}-DVD-${arch}-Build${old}-Media1/ChangeLog) <(curl -s ftp://openqa.suse.de/SLE-${version}-${product}-DVD-${arch}-Build${new}-Media1/ChangeLog)
+# Consider piping the output to `sed -n 's/^\+//p'` to show only "new" parts
