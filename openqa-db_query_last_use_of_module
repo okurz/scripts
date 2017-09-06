@@ -38,6 +38,10 @@ def parse_args():
                         help="The failing module to look for")
     parser.add_argument('--dry-run', action='store_true',
                         help="Do not do any action on the host")
+    parser.add_argument('--limit', type=int, default=30,
+                        help="How many results to return")
+    parser.add_argument('--age', default='90 days',
+                        help="How far to look back in history")
     args = parser.parse_args()
     verbose_to_log = {
         0: logging.CRITICAL,
@@ -58,9 +62,7 @@ def call(cmds, dry_run=False):
 
 def main():
     args = parse_args()
-    limit=30
-    age='90 days'
-    sql_query = 'select distinct distri,version,flavor,test,arch,machine from jobs where id in (select job_id from job_modules where (name=\'{module}\')and t_updated > now() - interval \'{age}\') limit {limit};'.format(module=args.module, limit=limit, age=age)
+    sql_query = 'select distinct distri,version,flavor,test,arch,machine from jobs where id in (select job_id from job_modules where (name=\'{module}\')and t_updated > now() - interval \'{age}\') limit {limit};'.format(module=args.module, limit=args.limit, age=args.age)
     call(['ssh', args.openqa_host] + ['sudo -u geekotest psql -t --command="{sql_query}" openqa'.format(sql_query=sql_query)], args.dry_run)
 
 
