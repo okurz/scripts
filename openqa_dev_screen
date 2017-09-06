@@ -31,14 +31,17 @@ zombie zr
 sessionname openqa_dev_screen
 
 screen -t oq-wu bash -c 'cd /local/openQA && sudo -u geekotest script/openqa daemon; exec bash'
-screen -t oq-sd bash -c 'cd /local/openQA && sudo -u geekotest script/openqa-scheduler; exec bash'
+screen -t oq-sc bash -c 'cd /local/openQA && sudo -u geekotest script/openqa-scheduler; exec bash'
 screen -t oq-ws bash -c 'cd /local/openQA && sudo -u geekotest script/openqa-websockets; exec bash'
 screen -t oq-w-oqa bash -c 'cd /local/openQA && sudo -u _openqa-worker nice -n 4 ./script/worker --instance 9 --isotovideo /local/os-autoinst/isotovideo --verbose --no-cleanup; exec bash'
 screen -t oq-w-tw bash -c 'cd /local/openQA && sudo -u _openqa-worker nice -n 4 ./script/worker --instance 11 --isotovideo /local/os-autoinst/isotovideo --verbose --no-cleanup; exec bash'
 screen -t oq-w-sle bash -c 'cd /local/openQA && sudo -u _openqa-worker nice -n 4 ./script/worker --instance 10 --isotovideo /local/os-autoinst/isotovideo --verbose --no-cleanup; exec bash'
-screen -t tests bash -c '/local/os-autoinst-distri-opensuse/ ; exec bash'
+screen -t tests bash -c 'cd /local/os-autoinst-distri-opensuse/ ; exec bash'
 screen -t oq-w-zvm bash -c 'cd /local/openQA && sudo -u _openqa-worker nice -n 4 ./script/worker --instance 34 --isotovideo /local/os-autoinst/isotovideo --verbose; exec bash'
-screen -t client bash -c '/local/os-autoinst-distri-opensuse/ ; exec bash'
+screen -t client-tw bash -c 'cd /local/os-autoinst-distri-opensuse/ ; exec bash'
+screen -t client-sle bash -c 'cd /local/os-autoinst-distri-opensuse/ ; exec bash'
+screen -t short bash -c 'cd ~/local/schort && env FLASK_APP=schort.py flask run --host=0.0.0.0 ; exec bash'
+screen -t os-autoinst bash -c 'cd /local/os-autoinst; exec bash'
 EOF
 
 screen -S $name -c $config
