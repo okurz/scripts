@@ -26,16 +26,16 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=CustomFormatter)
     parser.add_argument('-v', '--verbose',
                         help="Increase verbosity level, specify multiple times to increase verbosity", action='count', default=1)
+    parser.add_argument('--build', required=True,
+                        help="The build for which to look for a failing module")
+    parser.add_argument('--module', required=True,
+                        help="The failing module to look for")
     parser.add_argument('--openqa-host', default="https://openqa.suse.de",
                         help="The openQA host to act on")
-    parser.add_argument('--build',
-                        help="The build for which to look for a failing module")
-    parser.add_argument('--module',
-                        help="The failing module to look for")
     parser.add_argument('--result',
                         help="The result of the jobs to look for",
                         default='failed')
-    parser.add_argument('--label',
+    parser.add_argument('--label', default='',
                         help="The label to write as comment for each found job")
     parser.add_argument('--dry-run', action='store_true',
                         help="Do not do any action on openQA")
