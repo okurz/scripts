@@ -68,6 +68,7 @@ def main():
     log.debug("args: %s" % args)
     host = args.openqa_host if args.openqa_host.startswith('https://') else 'https://' + args.openqa_host
     r = requests.get(urljoin(host, 'api/v1/jobs?result=%s&latest=1&scope=relevant&build=%s' % (args.result, args.build)))
+    r.raise_for_status()
     jobs = r.json()['jobs']
     jobs_with_failed_module = [j for j in jobs if [m for m in j['modules'] if m['name'] == args.module and m['result'] == args.result]]
     def comments(job):
