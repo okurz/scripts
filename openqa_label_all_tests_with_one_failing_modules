@@ -66,7 +66,8 @@ def main():
         return call(openqa_cmd + cmds, args.dry_run)
 
     log.debug("args: %s" % args)
-    r = requests.get(urljoin(args.openqa_host, 'api/v1/jobs?result=%s&latest=1&scope=relevant&build=%s' % (args.result, args.build)))
+    host = args.openqa_host if args.openqa_host.startswith('https://') else 'https://' + args.openqa_host
+    r = requests.get(urljoin(host, 'api/v1/jobs?result=%s&latest=1&scope=relevant&build=%s' % (args.result, args.build)))
     jobs = r.json()['jobs']
     jobs_with_failed_module = [j for j in jobs if [m for m in j['modules'] if m['name'] == args.module and m['result'] == args.result]]
     def comments(job):
