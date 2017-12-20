@@ -1,0 +1,3 @@
+#!/bin/sh -e
+# -device virtio-blk,drive=hd1 -drive file=raid/l1,cache=unsafe,if=none,id=hd1,format=qcow2 -drive media=cdrom,if=none,id=cd0,format=raw,file=/mounts/dist/install/SLE-12-SP2-UNTESTED/SLE-12-SP2-Server-DVD-x86_64-Build1567-Media1.iso -device scsi-cd,drive=cd0,bus=scsi0.0 -boot once=d,menu=on,splash-time=5000
+qemu-system-x86_64 -serial file:serial0 -global isa-fdc.driveA= -vga qxl -m 1024 -cpu host -netdev user,id=qanet0 -device virtio-net,netdev=qanet0,mac=52:54:00:12:34:56 -device virtio-scsi-pci,id=scsi0 -device usb-ehci -device usb-tablet -smp 1 -enable-kvm $@
