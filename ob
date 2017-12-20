@@ -1,0 +1,11 @@
+#!/bin/sh -e
+shopt -s extglob
+# by default select any spec file not created by services
+spec="${spec:-"!(*:*).spec"}"
+args="${args:-"--ccache --keep-pkgs=~/local/tmp --prefer-pkgs=~/local/tmp"}"
+osc build $args $spec $@
+[ -e _multibuild ] || exit 0
+for package in $(grep -soP '(?<=package>).*(?=</package>)' _multibuild); do
+    echo "### Testing multibuild sub-package '$package'"
+    osc build -M $package $args $spec $@
+done
