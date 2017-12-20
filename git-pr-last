@@ -1,3 +1,3 @@
 #!/bin/sh -e
 target="${target:-"$USER"}"
-git push $target && git show --no-patch --format=%B | hub pull-request -F -
+git push $target && git show --no-patch --format=%B | hub pull-request -F - $@
