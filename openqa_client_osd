@@ -1,0 +1,2 @@
+#!/bin/sh -e
+~/local/os-autoinst/openQA/script/client --host https://openqa.suse.de "$@"

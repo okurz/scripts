@@ -1,0 +1,4 @@
+#!/bin/sh -e
+# we should not need to specify the key and secret here but use the config
+# file
+~/local/os-autoinst/openQA/script/client --host https://openqa.opensuse.org "$@"

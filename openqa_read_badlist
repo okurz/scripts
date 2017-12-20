@@ -1,0 +1,4 @@
+#!/bin/sh -e
+host="${host:-"https://openqa.suse.de"}"
+id="${1:?"Need an openQA job id as first parameter"}"
+curl -s $host/tests/$id/file/start_install-y2logs.tar.bz2 | tar -xjf - YaST2/badlist -O
