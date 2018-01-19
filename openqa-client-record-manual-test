@@ -1,0 +1,17 @@
+#!/bin/sh -e
+TEST_PREFIX="${TEST_PREFIX:-"manual_test"}"
+TEST_SUFFIX="${TEST_SUFFIX:-"1"}"
+TEST="${TEST:-"${TEST_PREFIX}_${TEST_SUFFIX}"}"
+DISTRI="${DISTRI:-"sle"}"
+VERSION="${VERSION:?"need VERSION parameter"}"
+BUILD="${BUILD:?"need BUILD parameter"}"
+ARCH="${ARCH:?"need ARCH parameter"}"
+FLAVOR="${FLAVOR:-"Installer-DVD"}"
+_GROUP="${_GROUP:?"need _GROUP parameter"}"
+text="${text:?"need text parameter for comment section"}"
+result="${result:?"need result parameter"}"
+host="${host:-"http://openqa.suse.de"}"
+id="$(openqa-client --host ${host} --json-output jobs post WORKER_CLASS=::manual TEST=${TEST} DISTRI=${DISTRI} VERSION=${VERSION} BUILD=${BUILD} FLAVOR=${FLAVOR} ARCH=${ARCH} _GROUP=${_GROUP} $@ | jq '.id')"
+openqa_client_osd --host ${host} --json-output jobs/${id}/comments post text="${text}"
+openqa_client_osd --host ${host} --json-output jobs/${id}/set_done post result=${result}
+echo "Created job ${host}/tests/${id}"
