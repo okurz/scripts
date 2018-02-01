@@ -58,8 +58,6 @@ def call(cmds, dry_run=False):
 
 def main():
     args = parse_args()
-    #sql_query = 'select distinct distri,version,flavor,test,arch,machine from jobs where id in (select job_id from job_modules where (name=\'{module}\')and t_updated > now() - interval \'{age}\') limit {limit};'.format(module=args.module, limit=args.limit, age=args.age)
-    #call(['ssh', args.openqa_host] + ['sudo -u geekotest psql -t --command="{sql_query}" openqa'.format(sql_query=sql_query)], args.dry_run)
     url = urllib.parse.urljoin(args.etherpad_url, 'export/markdown')
     cmd = "curl -s " + url + " | grep -B 3 -P 'Status.*(RED|AMBER|GREEN)' | sed -n -e 's/\s*Status:\s*//p' -e '/^#/p'"
     log.debug("cmd: %s" % cmd)
