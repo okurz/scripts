@@ -1,0 +1,9 @@
+#!/bin/sh -e
+shopt -s extglob
+args="${args:-""}"
+ob $args $@
+[ -e _multibuild ] || exit 0
+for package in $(grep -soP '(?<=package>).*(?=</package>)' _multibuild); do
+    echo "### Testing multibuild sub-package '$package'"
+    ob -M $package $args $@
+done
