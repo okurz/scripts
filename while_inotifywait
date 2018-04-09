@@ -3,4 +3,15 @@
 # they are actually not ready to be executed so better just use "close_write"
 # to reduce the calls
 #while inotifywait -q -r -e close_write,moved_to,create . ; do "$@" ; done
+
+# with 'close_write,moved_to' one can still have the problem that a
+# file is not completely written or only a temporary file is written before
+# the target file is done being written and the command triggered fails to find the
+# file at all.
+# https://stackoverflow.com/questions/46542819/bash-script-inotifywait-wait-for-file-completely-written-before-proceding mentions as well that 'close_write'
+# should be enough. Following
+# https://stackoverflow.com/questions/10300835/too-many-inotify-events-while-editing-in-vim
+# the missing part seems to have been that vim writes a temporary file first
+# before writing the real file which I disabled and this seems to have done
+# the trick
 while inotifywait -q -r -e close_write,moved_to . ; do "$@" ; done
