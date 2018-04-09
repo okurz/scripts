@@ -1,0 +1,1 @@
+for i in download_files source_validator ; do osc service localrun $i ; done
