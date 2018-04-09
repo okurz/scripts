@@ -1,0 +1,20 @@
+#!/bin/sh
+# Run program unless it's already running.
+
+# This is the process to check for, overwrite if not the program we want to
+# start, e.g. if starting a shell script which in turn starts another process
+# that keeps on running
+process="${process:-"$1"}"
+
+#if [ -z "`ps -Af | grep -o -w ".*$1" | grep -v grep | grep -v run-once`" ]; then
+#    $@
+#fi
+
+#Alternative
+# https://awesome.naquadah.org/wiki/Nm-applet
+# also using this to call scripts over symlinks which are not detected with
+# pgrep alone, trying 'pgrep -f'.
+# This also does not work because it then detects the current run_once script
+# (this one)
+# The only reliable way I always revert to:
+ps -ef f | grep -v grep | grep -v $(basename $0) | grep $process > /dev/null || ($@ &)
