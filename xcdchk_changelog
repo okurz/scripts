@@ -1,0 +1,6 @@
+#!/bin/sh -e
+old="${1:?"need old build id"}"
+new="${2:?"need new build id"}"
+version="${version:-"15"}"
+product="${product:-"Packages-Test"}"
+old=547.4 new=550.2; curl -s "http://xcdchk.suse.de/raw/SLE-${version}-${product}/${new}/all/ChangeLog-SLE-${version}-${product}-Build${old}-Build${new}" | less
