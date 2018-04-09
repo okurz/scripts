@@ -1,0 +1,2 @@
+#!/bin/sh -e
+systemctl start "$@" ; journalctl -f -u "$@"
