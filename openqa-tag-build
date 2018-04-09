@@ -1,0 +1,6 @@
+#!/bin/sh -e
+group_id="${group_id:-"110"}"
+build="${1:?"Need build id, e.g. '15-438.1'"}"
+milestone="${2:?"Need milestone id, e.g. 'Beta6C2'"}"
+tag="${tag:-"important"}"
+openqa_client_osd groups/${group_id}/comments post text=tag:${build}:${tag}:${milestone}
