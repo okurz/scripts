@@ -2,5 +2,5 @@
 shopt -s extglob
 # by default select any spec file not created by services
 spec="${spec:-"!(*:*).spec"}"
-args="${args:-"--ccache --keep-pkgs=~/local/tmp --prefer-pkgs=~/local/tmp"}"
+args="${args:-"--ccache --keep-pkgs=$HOME/local/tmp --prefer-pkgs=$HOME/local/tmp"}"
 osc build $args $spec $@
