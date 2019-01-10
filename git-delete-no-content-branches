@@ -1,6 +1,6 @@
 #!/bin/sh -e
 for i in $(git branch-raw); do
     if [ "$(git log1 origin/master..$i | wc -l)" = "0" ]; then
-        git branch -d $i
+        git branch -D $i
     fi
 done
