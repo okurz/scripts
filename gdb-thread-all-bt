@@ -2,4 +2,4 @@
 app="${1:?"Need app name to attach to"}"
 pid="${pid:-"$(pidof $app)"}"
 logfile="${logfile:-"/tmp/${app}_bt_all.log"}"
-pidof $pid && gdb --batch -q -ex "thread apply all bt" -ex q $(which $app) $pid |& tee /tmp/${app}_bt_all.log
+gdb --batch -q -ex "thread apply all bt" -ex q $(which $app) $pid |& tee /tmp/${app}_bt_all.log
