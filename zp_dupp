@@ -1,7 +1,7 @@
 #!/bin/sh -e
 zp_opts="${zp_opts:-""}"
 # maybe is even safer: zypper ref && zypper -v dup --no-r -d  && zypper -v dup --no-r
-$(dirname $0)/zp ${zp_opts} dup --no-allow-vendor-change "$@"
+"$(dirname "$0")/zp" "${zp_opts}" dup --no-allow-vendor-change "$@"
 
 # openqa packages will reset permissions. To use my custom group I need to set
 # this properly every time an update of openQA or os-autoinst is done.
