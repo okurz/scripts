@@ -1,0 +1,47 @@
+#!/bin/sh -e
+
+# because of recent problems 2017-03-15 when calling this script after wakeup
+# from suspend I add some logging to pin down which part exactly could cause a
+# kernel panic
+
+additional_log_arg="$*"
+logfile="${logfile:-"$HOME/switch_display.log"}"
+
+log() {
+    true
+    # strange, last time I could not reproduce the problem in boo#1029634 with
+    # kernel-4.4.62-5.g2c1de65-default, even not in my "full setup" with
+    # starting all applications. Maybe the reason was the following writing to
+    # logfiles and sync being enabled which gives enough time for the
+    # individual xrandr calls to "cool down" between each call? Disabled to
+    # crosscheck again if it happens.
+    # No, didn't happen. Maybe the problem is really gone for good
+    echo "$(date +%F-%H-%M-%S): $0: $* $additional_log_arg" >> ${logfile}
+    sync
+}
+
+# When the external monitor at the docking station was connected the last time
+# we used the computer it would stay off (sometimes) unless we explicitly
+# disable it once and re-enable it so we switch to the configuration of only
+# one screen and then back to the 'auto' configuration
+
+log "before, switching external off"
+xrandr --output eDP1 --primary --auto --output DP1-1 --off --output DP1-2 --off --output HDMI1 --off
+
+#(sleep 2 ; sudo chvt 1) &
+
+log "switching eDP1 on"
+# --> this is most likely where it fails with boo#1029634 or the follow on bug
+xrandr --output eDP1 --primary --auto --output DP1-1 --crtc 1 --auto --left-of DP1-2 --output DP1-2 --crtc 2 --auto --left-of eDP1 --output HDMI1 --auto --above eDP1
+
+log "after xrandr, before kill redundant nm instances"
+
+# workaround: nm-applet seems to be spawned on each new display that is added
+# but only shown on one screen so this does not help. Killing all superfluous
+# instances
+redundant_nm_instance_pids=$(pgrep -f nm-applet | tail -n +2)
+if [ "$redundant_nm_instance_pids" != "" ]; then
+    kill $redundant_nm_instance_pids
+fi
+
+log "done"
