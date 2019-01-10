@@ -1,1 +1,1 @@
-for i in *.JPG ; do mogrify -verbose -quality 80% $i ; jhead -ft $i ; done
+for i in *.{JPG,jpg} ; do mogrify -verbose -quality 80% $i ; jhead -ft $i ; done
