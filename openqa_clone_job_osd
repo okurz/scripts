@@ -1,2 +1,2 @@
 #!/bin/sh -e
-~/local/os-autoinst/openQA/script/clone_job.pl --skip-download --from https://openqa.suse.de --host https://openqa.suse.de "$@"
+openqa-clone-job --skip-download --from https://openqa.suse.de --host https://openqa.suse.de "$@"
