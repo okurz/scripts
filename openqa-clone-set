@@ -2,8 +2,8 @@
 
 set -o pipefail
 user="${user:-"$USER"}"
-start="${first:-"001"}"
-end="${last:-"010"}"
+start="${start:-"001"}"
+end="${end:-"010"}"
 
 if [ -z ${host+x} ] || [ -z ${job+x} ]; then
     job_url="${1:?"Need 'job_url' as parameter pointing to the openQA job to clone or 'host' and 'job' variables, e.g. either 'https://openqa.opensuse.org/tests/123456' or 'https://openqa.opensuse.org' and '123456'"}"
