@@ -16,6 +16,6 @@ group="${group:-0}"
 
 dry_run="${dry_run:-""}"
 for i in $(eval echo "{$start..$end}"); do
-    $dry_run openqa-clone-job --skip-chained-deps --within-instance $host $job TEST=${name}_$i BUILD=${name} _GROUP=$group $*
+    $dry_run openqa-clone-job --skip-chained-deps --within-instance $host $job TEST=${name}_$i BUILD=${name} _GROUP=$group "${@:3}"
 done
 
