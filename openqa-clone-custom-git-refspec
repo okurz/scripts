@@ -18,7 +18,7 @@ if [ -z ${host+x} ] || [ -z ${job+x} ]; then
     job=${job_url##*/}
 fi
 
-if [ -z ${branch+x} ] || [ -z ${repo_name+x} ] || [ -z ${repo_branch+x} ]; then
+if [ -z ${branch+x} ] || [ -z ${repo_name+x} ]; then
     pr_content=$(curl -s ${target_repo_part/github.com/api.github.com/repos}/pulls/$pr)
     label=$(echo $pr_content | jq -r '.head.label')
     repo_name="${repo_name:-"${label%:*}/${target_repo_part##*/}"}"
