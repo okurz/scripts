@@ -1,0 +1,4 @@
+#!/bin/sh -e
+fate_id="${1:?"Need FATE ID"}"
+key=$(curl -s --config ~/.jira_userrc "https://jira.suse.de/rest/api/latest/search?maxResults=1&jql=type%20=%20Epic%20and%20%22External%20Id%22%20~%20%22${fate_id}%22&fields=issues.key" | jq -r '.issues | .[] | .key')
+echo https://jira.suse.de/browse/$key
