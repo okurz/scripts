@@ -1,0 +1,4 @@
+#!/bin/sh -e
+job_url="${1:?"Need URL to openQA job"}"
+nr_modules="${nr:-"10"}"
+curl -s $job_url/file/autoinst-log.txt | sed -n 's/^.*||| finished \([a-z_]*\).* (\([0-9]* s\))/\2 \1/p' | sort -n | tail -n $nr_modules
