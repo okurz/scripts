@@ -1,0 +1,13 @@
+#!/bin/sh -e
+repo_base="${repo_base:-"http://dist.suse.de/ibs/SUSE:/SLE-15-SP1:/GA:/TEST/images/repo/"}"
+container="${container:-"registry.suse.de/suse/sle-15-sp1/ga/images/suse/sle15:15.1"}"
+arch="${arch:-"x86_64"}"
+medium="${medium:-"Media1"}"
+cmd="${*:-"bash"}"
+repos=$(curl -s $repo_base/?P=*$arch*$medium* | sed -n "/$medium\//s/^.*href=\"\([^\"]*\).*$/\1/p")
+docker run -it --rm $container sh -c " \
+rm -f /usr/lib/zypp/plugins/services/container-suseconnect*
+for i in $(echo $repos); do zypper -q -n ar -fGC $repo_base\$i \${i%%/}; done
+zypper -n ref
+$cmd
+"
