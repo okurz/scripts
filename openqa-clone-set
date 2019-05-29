@@ -13,9 +13,10 @@ fi
 
 name="${2:-"${user}_investigation"}"
 group="${group:-0}"
+build="${build:-"$name"}"
 
 dry_run="${dry_run:-""}"
 for i in $(eval echo "{$start..$end}"); do
-    $dry_run openqa-clone-job --skip-chained-deps --within-instance $host $job TEST=${name}_$i BUILD=${name} _GROUP=$group "${@:3}"
+    $dry_run openqa-clone-job --skip-chained-deps --within-instance $host $job TEST=${name}_$i BUILD=${build} _GROUP=$group "${@:3}"
 done
 
