@@ -1,0 +1,2 @@
+#!/bin/sh -e
+zypper rm $(zypper packages --unneeded| awk '/^i/{ print $5 }' ORS=" ")
