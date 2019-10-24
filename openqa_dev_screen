@@ -31,8 +31,8 @@ zombie zr
 sessionname openqa_dev_screen
 
 screen -t oq-wu bash -c 'cd /local/openQA && sudo -u geekotest script/openqa daemon; exec bash'
-screen -t oq-sc bash -c 'cd /local/openQA && sudo -u geekotest script/openqa-scheduler; exec bash'
-screen -t oq-ws bash -c 'cd /local/openQA && sudo -u geekotest script/openqa-websockets; exec bash'
+screen -t oq-sc bash -c 'cd /local/openQA && sudo -u geekotest script/openqa-scheduler daemon; exec bash'
+screen -t oq-ws bash -c 'cd /local/openQA && sudo -u geekotest script/openqa-websockets daemon; exec bash'
 screen -t oq-w-oqa bash -c 'cd /local/openQA && sudo -u _openqa-worker nice -n 4 ./script/worker --instance 9 --isotovideo /local/os-autoinst/isotovideo --verbose --no-cleanup; exec bash'
 screen -t oq-w-tw bash -c 'cd /local/openQA && sudo -u _openqa-worker nice -n 4 ./script/worker --instance 11 --isotovideo /local/os-autoinst/isotovideo --verbose --no-cleanup; exec bash'
 screen -t oq-w-sle bash -c 'cd /local/openQA && sudo -u _openqa-worker nice -n 4 ./script/worker --instance 10 --isotovideo /local/os-autoinst/isotovideo --verbose --no-cleanup; exec bash'
