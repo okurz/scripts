@@ -3,7 +3,7 @@
 usage() {
     cat << EOF
 Usage:
- osc-staging-link-all-missing-deps <staging_project> [<package_name>]
+ osc-staging-link-all-missing-deps <staging_project> [<package_name> ...]
 
 Options:
  -v, --verbose      execute with verbose output
@@ -44,7 +44,7 @@ main() {
     repo="${repo:-"standard"}"
     arch="${arch:-"x86_64"}"
     base="${base:-"openSUSE:Factory"}"
-    all_pkgs=$( (osc list --expand "$base":Rings:0-Bootstrap && osc list --expand "$base":Rings:1-MinimalX) | tr '\n' '|' | sed -e 's@|$@@' -e 's@|@\\|@g')
+    all_pkgs=$( (osc list --expand "$base":Rings:0-Bootstrap && osc list --expand "$project") | tr '\n' '|' | sed -e 's@|$@@' -e 's@|@$\\|@g')
     pkgs="${*:2}"
     if [ -z "$pkgs" ]; then
         pkgs="$($osc list "$project")"
