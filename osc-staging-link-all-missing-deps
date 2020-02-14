@@ -1,0 +1,57 @@
+#!/bin/sh -e
+
+usage() {
+    cat << EOF
+Usage:
+ osc-staging-link-all-missing-deps <staging_project> [<package_name>]
+
+Options:
+ -v, --verbose      execute with verbose output
+ -h, -?, --help     display this help
+ -n, --dry-run      execute in dry-run mode, do not clone any openQA jobs
+
+Examples:
+ osc-staging-link-all-missing-deps openSUSE:Factory:Staging:H
+ osc-staging-link-all-missing-deps openSUSE:Factory:Staging:H kdeconnect-kde
+EOF
+    exit
+}
+
+set -o pipefail
+
+opts=$(getopt -o vhn --long verbose,dry-run,help -n 'parse-options' -- "$@") || usage
+eval set -- "$opts"
+while true; do
+  case "$1" in
+    -v | --verbose ) set -x; shift ;;
+    -h | --help ) usage; shift ;;
+    -n | --dry-run ) dry_run="echo"; shift ;;
+    -- ) shift; break ;;
+    * ) break ;;
+  esac
+done
+
+link_deps() {
+    pkg="${1?"Need package"}"
+    for dep in $(osc dependson "$base" "$pkg" "$repo" "$arch" | tail -n +2 | grep -v "($all_pkgs)"); do
+        $dry_run "$osc" linkpac "$base" "$dep" "$project"
+    done
+}
+
+main() {
+    project="$1"
+    osc="${osc:-"$(command -v osc)"}"
+    repo="${repo:-"standard"}"
+    arch="${arch:-"x86_64"}"
+    base="${base:-"openSUSE:Factory"}"
+    all_pkgs=$( (osc list --expand "$base":Rings:0-Bootstrap && osc list --expand "$base":Rings:1-MinimalX) | tr '\n' '|' | sed -e 's@|$@@' -e 's@|@\\|@g')
+    pkgs="${*:2}"
+    if [ -z "$pkgs" ]; then
+        pkgs="$($osc list "$project")"
+    fi
+    for pkg in $pkgs; do
+        link_deps "$pkg"
+    done
+}
+
+main "$@"
