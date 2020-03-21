@@ -1,0 +1,7 @@
+#!/bin/bash -e
+set -euo pipefail
+old="${1:?"need old build id"}"
+new="${2:?"need new build id"}"
+product="${product:-"Tumbleweed"}"
+base_url="${base_url:-"https://openqa.opensuse.org/snapshot-changes/opensuse/${product}/diff/"}"
+diff -Naur <(curl -s "${base_url}${old}") <(curl -s "${base_url}${new}")

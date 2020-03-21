@@ -14,4 +14,9 @@
 # the missing part seems to have been that vim writes a temporary file first
 # before writing the real file which I disabled and this seems to have done
 # the trick
-while inotifywait -q -r -e close_write,moved_to . ; do "$@" ; done
+run() {
+    "$@"
+}
+
+run "$@"
+while inotifywait -q -r -e close_write,moved_to . ; do run "$@" ; done
