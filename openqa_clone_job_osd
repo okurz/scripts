@@ -1,2 +1,2 @@
 #!/bin/sh -e
-openqa-clone-job --skip-download --from https://openqa.suse.de --host https://openqa.suse.de "$@"
+openqa-clone-job --within-instance https://openqa.suse.de "$@"
