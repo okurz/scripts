@@ -4,7 +4,9 @@ zp_opts="${zp_opts:-""}"
 # okurz: 2019-11-09: vendor changes should be controlled with proper
 # repository priorities, not disallowed
 #"$(dirname "$0")/zp" "${zp_opts}" dup --no-allow-vendor-change "$@"
-"$(dirname "$0")/zp" "${zp_opts}" dup "$@"
+# okurz: 2020-03-30: But we might need to overwrite older left over files in
+# "@System", as happened on 2020-03-30 03.00
+"$(dirname "$0")/zp" "${zp_opts}" dup --replacefiles "$@"
 
 # openqa packages will reset permissions. To use my custom group I need to set
 # this properly every time an update of openQA or os-autoinst is done.
