@@ -1,6 +1,6 @@
 #!/bin/sh -e
-repo_base="${repo_base:-"http://dist.suse.de/ibs/SUSE:/SLE-15-SP1:/GA:/TEST/images/repo/"}"
-container="${container:-"registry.suse.de/suse/sle-15-sp1/ga/images/suse/sle15:15.1"}"
+repo_base="${repo_base:-"http://dist.suse.de/ibs/SUSE:/SLE-15-SP2:/GA:/TEST/images/repo/"}"
+container="${container:-"registry.suse.de/suse/sle-15-sp2/update/cr/images/suse/sle15:15.2"}"
 arch="${arch:-"x86_64"}"
 medium="${medium:-"Media1"}"
 cmd="${*:-"bash"}"
