@@ -1,2 +1,3 @@
 #!/bin/sh -e
+PATH=~/local/os-autoinst/os-autoinst:$PATH
 isotovideo -d _exit_after_schedule=1 casedir=$(cat vars.json | jq '.CASEDIR' | sed -e 's@cache@share@' -e 's/"//g') prjdir=/var/lib/openqa productdir=$(cat vars.json | jq '.PRODUCTDIR' | sed -e 's@cache@share@' -e 's/"//g') $@
