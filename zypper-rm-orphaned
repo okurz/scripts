@@ -1,0 +1,2 @@
+#!/bin/sh -e
+zypper rm $(zypper packages --orphaned| awk '/^i/{ print $5 }' ORS=" ")
