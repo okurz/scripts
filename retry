@@ -1,0 +1,12 @@
+#!/bin/sh -e
+
+RETRIES="${RETRIES:-3}"
+SLEEP="${SLEEP:-3}"
+
+while [ "$RETRIES" -ge 0 ] ; do
+    # shellcheck disable=SC2048
+    $* && break
+    echo "Retrying up to $RETRIES more times after sleeping ${SLEEP}s …"
+    RETRIES=$((RETRIES-1))
+done
+[ $RETRIES -ge 0 ]
