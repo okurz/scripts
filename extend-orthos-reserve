@@ -1,0 +1,15 @@
+#!/usr/bin/expect -f
+spawn orthos
+expect -re "(orthos .*)"
+send -- "RESERVE lord.arch\n"
+expect -re "Orthos password for .*: "
+send -- "[read [open ".orthos_passwdrc" r]]\n"
+expect -re "User for which you want to reserve.*"
+send -- "\n"
+expect -re "Reason.*"
+send -- "\n"
+expect "Duration (days)"
+send -- "30\n"
+expect "Machine info:"
+send -- "\x04"
+expect "Good bye"
