@@ -1,3 +1,4 @@
+# a better approach is https://askubuntu.com/questions/1098683/how-do-i-make-ubuntu-select-my-headset-mic-as-default-input-automatically/1229519#1229519
 (while [ $? = 0 ]; do
     pactl list sources | grep -q 'analog-input-headset-mic.*not available' || pacmd set-source-port alsa_input.pci-0000_00_1b.0.analog-stereo analog-input-headset-mic || pacmd set-source-port alsa_input.pci-0000_00_1f.3.analog-stereo analog-input-headset-mic
     sleep 28
