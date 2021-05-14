@@ -1,0 +1,4 @@
+(while [ $? = 0 ]; do
+    pactl list sources | grep -q 'analog-input-headset-mic.*not available' || pacmd set-source-port alsa_input.pci-0000_00_1b.0.analog-stereo analog-input-headset-mic || pacmd set-source-port alsa_input.pci-0000_00_1f.3.analog-stereo analog-input-headset-mic
+    sleep 28
+done &)
