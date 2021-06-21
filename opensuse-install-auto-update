@@ -1,0 +1,1 @@
+test -e /etc/cron.d/auto-update || echo '0 3 * * 0 root zypper -n dup --replacefiles --auto-agree-with-licenses --force-resolution --download-in-advance && needs-restarting --reboothint >/dev/n   ull || (command -v rebootmgrctl >/dev/null && rebootmgrctl reboot ||:)' > /etc/cron.d/auto-update
