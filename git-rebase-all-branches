@@ -1,13 +1,14 @@
 #!/bin/sh
 
-git branch -a | grep -q gerrit/master
+git branch -a | grep -q 'gerrit/\(master\|main\)'
 if [ $? = 0 ]; then
-    default_rebase_target=gerrit/master
+    default_rebase_target=gerrit
 else
-    default_rebase_target=origin/master
+    default_rebase_target=origin
 fi
+branch=$(git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@')
 
-rebase_target="${rebase_target:-${1:-"$default_rebase_target"}}"
+rebase_target="${rebase_target:-${1:-"$default_rebase_target/$branch"}}"
 
 for i in $(git branch-raw | grep -v no_rebase) ; do
     git checkout $i && git rebase --rerere-autoupdate $rebase_target || break
