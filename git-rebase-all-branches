@@ -5,6 +5,7 @@ if git branch -a | grep -q 'gerrit/\(master\|main\)'; then
 else
     default_rebase_target=origin
 fi
+git symbolic-ref refs/remotes/$default_rebase_target/HEAD >/dev/null 2>&1 || git remote set-head origin --auto
 rebase_target="${rebase_target:-${1:-"$(git symbolic-ref refs/remotes/$default_rebase_target/HEAD | sed "s@^refs/remotes/default_rebase_target/@@")"}}"
 
 for i in $(git branch-raw | grep -v no_rebase) ; do
