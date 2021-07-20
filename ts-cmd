@@ -1,0 +1,2 @@
+help="${1?:"Need cmd to run"}"
+unbuffer $* 2>&1 | ts -i '%H:%M:%.S' | ts -s '%H:%M:%.S'
