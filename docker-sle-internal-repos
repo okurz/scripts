@@ -1,11 +1,13 @@
 #!/bin/sh -e
-repo_base="${repo_base:-"http://dist.suse.de/ibs/SUSE:/SLE-15-SP2:/GA:/TEST/images/repo/"}"
-container="${container:-"registry.suse.de/suse/sle-15-sp2/update/cr/images/suse/sle15:15.2"}"
+repo_base="${repo_base:-"http://dist.suse.de/ibs/SUSE:/SLE-15-SP3:/GA:/TEST/images/repo/"}"
+container="${container:-"registry.suse.de/suse/sle-15-sp3/update/cr/images/suse/sle15:15.3"}"
 arch="${arch:-"x86_64"}"
 medium="${medium:-"Media1"}"
 cmd="${*:-"bash"}"
-repos=$(curl -s $repo_base/?P=*$arch*$medium* | sed -n "/$medium\//s/^.*href=\"\([^\"]*\).*$/\1/p")
-docker run -it --rm $container sh -c " \
+repos=$(curl -s "$repo_base"/?P=*"$arch"*"$medium"* | sed -n "/$medium\//s/^.*href=\"\([^\"]*\).*$/\1/p")
+cre="${cre:-"podman"}"
+#shellcheck disable=SC2086
+$cre run -it --rm "$container" sh -c " \
 rm -f /usr/lib/zypp/plugins/services/container-suseconnect*
 for i in $(echo $repos); do zypper -q -n ar -fGC $repo_base\$i \${i%%/}; done
 zypper -n ref
