@@ -1,0 +1,55 @@
+#!/usr/bin/expect -f
+set username [lindex $argv 0]
+set password [lindex $argv 1]
+set hostname [lindex $argv 2]
+set outlet   [lindex $argv 3]
+
+if {[llength $argv] == 0} {
+  send_user "Usage: scriptname username \'password\' hostname outlet\n"
+  exit 1
+}
+
+spawn telnet $hostname
+expect "User Name :"
+send "$username\r"
+expect "*?assword*"
+send "$password\r"
+
+expect "\n> "
+send "1\r"
+expect " Device Manager *\n> "
+send "2\r"
+expect " Outlet Management *\n> "
+send "1\r"
+expect " Outlet Control*\n> "
+send "$outlet\r"
+expect " Control Outlet*\n> "
+send "1\r"
+expect " Immediate Reboot*\n> "
+send "3\r"
+expect -re "Enter 'YES' to continue.*: "
+send "YES\r"
+expect "Press <ENTER> to continue..."
+send "\r"
+expect " Immediate On*\n> "
+sleep 5
+send "1\r"
+expect -re "Enter 'YES' to continue.*: "
+send "YES\r"
+expect "Press <ENTER> to continue..."
+send "\r"
+expect " Control Outlet*\n> "
+send "\033"
+expect " Control Outlet*\n> "
+send "\033"
+expect " Outlet Control*\n> "
+send "\033"
+expect " Outlet Management *\n> "
+send "\033"
+expect " Device Manager *\n> "
+send "\033"
+expect " Control Console * Logout*\n> "
+send "4\r"
+
+expect eof
+close $spawn_id
