@@ -32,7 +32,7 @@ xrandr --output eDP1 --primary --auto --output DP1-1 --off --output DP1-2 --off 
 
 log "switching eDP1 on"
 # --> this is most likely where it fails with boo#1029634 or the follow on bug
-xrandr --output eDP-1 --primary --auto --output DP-1-3 --auto --above eDP-1 --output eDP1 --primary --auto --output DP1-1 --crtc 1 --auto --left-of DP1-2 --output DP1-2 --crtc 2 --auto --left-of eDP1 --output HDMI1 --auto --above eDP1 --above eDP-1 --output DP-5 --auto --above eDP1 --above eDP-1 --output DP-6 --auto --above eDP1 --above eDP-1 --output DP-7 --auto --above eDP1 --above eDP-1
+xrandr --output eDP-1 --primary --auto --output DP-1-3 --auto --above eDP-1 --output eDP1 --primary --auto --output DP1-1 --crtc 1 --auto --left-of DP1-2 --output DP1-2 --crtc 2 --auto --left-of eDP1 --output HDMI1 --auto --above eDP1 --above eDP-1 --output DP-5 --auto --right-of eDP1 --right-of eDP-1 --output DP-6 --auto --right-of eDP1 --right-of eDP-1 --output DP-7 --auto --right-of eDP1 --right-of eDP-1
 
 log "after xrandr, before kill redundant nm instances"
 
