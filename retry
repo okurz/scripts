@@ -3,8 +3,7 @@
 RETRIES="${RETRIES:-3}"
 SLEEP="${SLEEP:-3}"
 
-# shellcheck disable=SC2048
-until $*; do
+until "$@"; do
     [ "$RETRIES" -ge 0 ] || break
     echo "Retrying up to $RETRIES more times after sleeping ${SLEEP}s …"
     RETRIES=$((RETRIES-1))
