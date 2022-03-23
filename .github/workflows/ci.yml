@@ -1,0 +1,21 @@
+---
+name: ci
+# yamllint disable-line rule:truthy
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: unit- and integration tests
+        run: |
+         make test-unit
+
+  style:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Static checks
+        run: |
+         sudo apt-get install shellcheck
+         make checkstyle
