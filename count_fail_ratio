@@ -7,5 +7,5 @@ runs="${runs:-"20"}"
 for ((i=1; i <= runs; i++)); do
     echo "## Run $i"
     $* || fails=$((fails+1))
-    echo "## $(basename "$0"): Run: $i. Fails: $fails. Fail ratio $((fails * 100/i))%"
+    echo "## $(basename "$0"): Run: $i. Fails: $fails. Fail ratio $(bc <<< "${fails} * 100/${i}")%"
 done
