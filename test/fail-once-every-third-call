@@ -1,0 +1,12 @@
+#!/bin/bash
+TMPDIR="${TMPDIR:-"/tmp"}"
+tmp="${tmp:-"$TMPDIR/tmp.$(basename "$0")"}"
+if [ -e "$tmp" ]; then
+    attempts="$(cat "$tmp")"
+fi
+if [[ -z "$attempts" ]]; then
+    attempts=0
+fi
+((attempts++))
+echo "$attempts" > "$tmp"
+((attempts%3))
