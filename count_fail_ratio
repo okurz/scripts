@@ -7,5 +7,7 @@ runs="${runs:-"20"}"
 for ((i=1; i <= runs; i++)); do
     echo "## Run $i"
     $* || fails=$((fails+1))
-    echo "## $(basename "$0"): Run: $i. Fails: $fails. Fail ratio $(bc <<< "scale=2;${fails} * 100/${i}")%"
+    echo -n "## $(basename "$0"): Run: $i. Fails: $fails. Fail ratio $(bc <<< "scale=2;${fails} * 100/${i}")%"
+    [[ $fails = 0 ]] && echo -n ". No fails, computed failure probability < $(bc <<< "scale=2;3 * 100/${i}")%"
+    echo ""
 done
