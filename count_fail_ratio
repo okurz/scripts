@@ -7,13 +7,13 @@ runs="${runs:-"20"}"
 for ((i=1; i <= runs; i++)); do
     echo "## Run $i"
     $* || fails=$((fails+1))
-    p=$(bc <<< "scale=2;${fails}/${i}")
-    standard_error=$(bc <<< "scale=2;sqrt(${p}*(1 - ${p})/${i})")
+    p=$(bc <<< "scale=9;${fails}/${i}")
+    standard_error=$(bc <<< "scale=9;sqrt(${p}*(1 - ${p})/${i})")
     # critical value (z_value) for a 95% confidence level. In this
     # case, the critical value is approximately 1.96.
     z_value=1.96
-    me=$(bc <<< "scale=2;${z_value}*${standard_error}")
-    echo -n "## $(basename "$0"): Run: $i. Fails: $fails. Fail ratio $(bc <<< "scale=2;${p} * 100")±$(bc <<< "scale=2;${me}*100")%"
+    me=$(bc <<< "scale=9;${z_value}*${standard_error}")
+    echo -n "## $(basename "$0"): Run: $i. Fails: $fails. Fail ratio $(bc <<< "r=${p} * 100;scale=2;r/1")±$(bc <<< "r=${me}*100;scale=2;r/1")%"
     [[ $fails = 0 ]] && echo -n ". No fails, computed failure probability < $(bc <<< "scale=2;3 * 100/${i}")%"
     echo ""
 done

@@ -38,4 +38,4 @@ tmp="${tmp:-"/tmp/tmp.fail-once-every-third-call"}"
 echo 0 > $tmp
 output=$(runs=10 call_cmd $dir/fail-once-every-third-call 2>&1) || rc=$?
 is "$rc" 0 'successful run for sporadically failing script'
-like "$output" 'count_fail_ratio: Run: 10. Fails: 3. Fail ratio 30.00±27.00%' 'counted sporadic failure'
+like "$output" 'count_fail_ratio: Run: 10. Fails: 3. Fail ratio 30.00±28.40%' 'counted sporadic failure'
