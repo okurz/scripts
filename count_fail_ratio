@@ -2,9 +2,10 @@
 # shellcheck disable=SC2048
 [ "$1" = "-h" ] || [ "$1" = "--help" ] && echo "Run an arbitrary command multiple times and count failures and fail ratio" && exit
 
-fails=0
+fails="${fails:-0}"
 runs="${runs:-"20"}"
-for ((i=1; i <= runs; i++)); do
+start="${start:-1}"
+for ((i=start; i <= runs; i++)); do
     echo "## Run $i"
     $* || fails=$((fails+1))
     p=$(bc <<< "scale=9;${fails}/${i}")
