@@ -15,7 +15,7 @@ use Test::More
 plan tests 8
 
 call_cmd() {
-    $dir/../count_fail_ratio $*
+    $dir/../count-fail-ratio $*
 }
 
 rc=0
@@ -31,11 +31,11 @@ like "$output" 'Run: 30. Fails: 0. Fail ratio 0.*%.*< 10.00%' 'computed failure 
 rc=0
 output=$(runs=3 call_cmd false 2>&1) || rc=$?
 is "$rc" 0 'successful run for all fails'
-like "$output" 'count_fail_ratio: Run: 3. Fails: 3. Fail ratio 100.00.*%' 'counted all fails'
+like "$output" 'count-fail-ratio: Run: 3. Fails: 3. Fail ratio 100.00.*%' 'counted all fails'
 
 rc=0
 tmp="${tmp:-"/tmp/tmp.fail-once-every-third-call"}"
 echo 0 > $tmp
 output=$(runs=10 call_cmd $dir/fail-once-every-third-call 2>&1) || rc=$?
 is "$rc" 0 'successful run for sporadically failing script'
-like "$output" 'count_fail_ratio: Run: 10. Fails: 3. Fail ratio 30.00±28.40%' 'counted sporadic failure'
+like "$output" 'count-fail-ratio: Run: 10. Fails: 3. Fail ratio 30.00±28.40%' 'counted sporadic failure'
