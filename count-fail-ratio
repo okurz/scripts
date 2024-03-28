@@ -15,7 +15,7 @@ for ((i=start; i <= runs; i++)); do
     if [ "$timing" = 1 ]; then
         t_run_end=$(date +%s%N)
         runtime=$(( (t_run_end - t_run_start) / 1000000 ))
-        times+=($runtime)
+        times+=("$runtime")
     fi
     p=$(bc <<< "scale=9;${fails}/${i}")
     standard_error=$(bc <<< "scale=9;sqrt(${p}*(1 - ${p})/${i})")
