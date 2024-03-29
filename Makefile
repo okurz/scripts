@@ -19,4 +19,4 @@ test-shellcheck:
 	@which shellcheck >/dev/null 2>&1 || echo "Command 'shellcheck' not found, can not execute shell script checks"
 	# many files report errors so far hence only including a fixed list so far
 	#shellcheck -x $$(file --mime-type * | sed -n 's/^\(.*\):.*text\/x-shellscript.*$$/\1/p')
-	shellcheck -x count-fail-ratio
+	#shellcheck -x count-fail-ratio ## moved to https://github.com/okurz/retry
