@@ -1,0 +1,73 @@
+#!/bin/bash -e
+
+default_dns_base=salt/profile/dns/files/
+
+usage() {
+    cat << EOF
+Usage: hosts-yaml-to-aaaa [path]
+
+Parse a hosts.yaml file with a format as used within the SUSE infrastructure
+recording the hostname and mac address of hosts and outputs SLAAC-compliant
+AAAA records that point to IPv6 address that the hosts possibly use.
+
+Options:
+ -v, --verbose               execute with verbose output
+ -h, -?, --help              display this help
+ -o, --offline               Output also host entries for hosts that are
+                             offline or do not respond to a ping request.
+ -p <path>, --path <path>    set different <path> to a hosts.yaml file,
+                             by default '$path'
+ -u, --unique                Output no already existing AAAA records if found
+                             in <dns_path>.
+ -d <dns_path>,
+    --dns-path <dns_path>    set different path <dns_path> to DNS zone file,
+                             by default
+                             '$default_dns_base<top_domain>/dns-<domain>'
+                             with '<top_domain>'+'<domain>' derived from <path>.
+
+Examples:
+ hosts-yaml-to-aaaa pillar/domain/my_org/hosts.yaml
+ hosts-yaml-to-aaaa -unique --offline --path hosts.yaml
+EOF
+    exit
+}
+
+set -o pipefail
+
+prefix="${prefix:-"2a07:de40:a102:5:"}"
+unique="${unique:-false}"
+offline="${offline:-false}"
+
+opts=$(getopt -o vhuop:d: --long verbose,help,unique,offline,path:,dns_path: -n 'parse-options' -- "$@") || usage
+eval set -- "$opts"
+while true; do
+  case "$1" in
+    -v | --verbose ) set -x; shift ;;
+    -h | --help ) usage; shift ;;
+    -u | --unique ) unique=true; shift ;;
+    -o | --offline ) offline=true; shift ;;
+    -p | --path ) path="$2"; shift 2 ;;
+    -d | --dns-path ) dns_path="$2"; shift 2 ;;
+    -- ) shift; break ;;
+    * ) break ;;
+  esac
+done
+
+path="${path:-${1:-"pillar/domain/qe_nue2_suse_org/hosts.yaml"}}"
+base=$(basename $(dirname $path))
+default_dns_path="salt/profile/dns/files/${base#*_}/dns-${base//_/.}"
+dns_path="${dns_path:-$default_dns_path}"
+
+export prefix
+
+yq -r 'to_entries[] | [.key, .value.mac] | @tsv' $path | while read -r host mac; do
+    ip=$(mac-to-ipv6 $mac)
+    ip=${ip,,}
+    if [ "$unique" = "true" ]; then
+        grep -q $ip $dns_path && continue
+    fi
+    if [ "$offline" != "true" ]; then
+        ping -q -c1 $ip >/dev/null || continue
+    fi
+    echo "$host       AAAA  $ip"
+done
