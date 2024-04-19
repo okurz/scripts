@@ -2,5 +2,6 @@
 target="${target:-"$USER"}"
 subject="${1:?"Need PR subject line"}"
 branch=$(git rev-parse --abbrev-ref HEAD)
-git push $target --force $branch && (echo -e "$subject\n\n" && \
-git log --pretty='* %s' origin/master..) | hub pull-request -F -
+git push $target --force-with-lease $branch && (echo -e "$subject\n\n" && \
+base=$(git branch -a | grep 'origin/\(master\|main\)' | tail -n1)
+git log --pretty='* %s' $base..) | hub pull-request -F -
