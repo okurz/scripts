@@ -1,6 +1,7 @@
 #!/bin/sh -e
+base=$(git branch -a | grep 'origin/\(master\|main\)' | tail -n1)
 for i in $(git branch-raw); do
-    if [ "$(git log1 origin/master..$i | wc -l)" = "0" ]; then
+    if [ "$(git log1 $base..$i | wc -l)" = "0" ]; then
         git branch -D $i
     fi
 done
