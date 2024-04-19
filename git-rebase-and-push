@@ -1,0 +1,3 @@
+#!/bin/sh -e
+base=$(git branch -a | grep 'origin/\(master\|main\)' | tail -n1)
+git pull --rebase origin ${base##*/} && git push okurz -f
