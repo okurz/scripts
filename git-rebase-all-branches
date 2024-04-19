@@ -1,14 +1,18 @@
 #!/bin/sh
 
-if git branch -a | grep -q 'gerrit/\(master\|main\)'; then
-    default_rebase_target=gerrit
-else
-    default_rebase_target=origin
-fi
-git symbolic-ref refs/remotes/$default_rebase_target/HEAD >/dev/null 2>&1 || git remote set-head origin --auto
-rebase_target="${rebase_target:-${1:-"$(git symbolic-ref refs/remotes/$default_rebase_target/HEAD | sed "s@^refs/remotes/default_rebase_target/@@")"}}"
+# maybe the whole logic about default_rebase_target can be replaced by '@',
+# see https://stackoverflow.com/a/66153331/22022448
+#if git branch -a | grep -q 'gerrit/\(master\|main\)'; then
+#    default_rebase_target=gerrit
+#else
+#    default_rebase_target=origin
+#fi
+#git symbolic-ref refs/remotes/$default_rebase_target/HEAD >/dev/null 2>&1 || git remote set-head origin --auto
+#rebase_target="${rebase_target:-${1:-"$(git symbolic-ref refs/remotes/$default_rebase_target/HEAD | sed "s@^refs/remotes/default_rebase_target/@@")"}}"
+rebase_target=$(git branch -a | grep 'origin/\(master\|main\)' | tail -n1)
 
 for i in $(git branch-raw | grep -v no_rebase) ; do
-    git checkout "$i" && git rebase --rerere-autoupdate "$rebase_target" || break
+    #shellcheck disable=SC2086 disable=SC2015
+    git checkout "$i" && git rebase --rerere-autoupdate $rebase_target || break
 done
 
