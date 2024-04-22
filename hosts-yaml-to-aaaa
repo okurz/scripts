@@ -27,6 +27,7 @@ Options:
                              by default
                              '$default_dns_base<top_domain>/dns-<domain>'
                              with '<top_domain>'+'<domain>' derived from <path>.
+ -r, --reverse               Instead of AAAA output reverse PTR records
 
 Examples:
  hosts-yaml-to-aaaa pillar/domain/my_org/hosts.yaml
@@ -41,7 +42,7 @@ prefix="${prefix:-"$default_prefix"}"
 unique="${unique:-false}"
 offline="${offline:-false}"
 
-opts=$(getopt -o vhuop:P:d: --long verbose,help,unique,offline,path:,prefix:,dns_path: -n 'parse-options' -- "$@") || usage
+opts=$(getopt -o vhuop:P:d:r --long verbose,help,unique,offline,path:,prefix:,dns_path:,reverse -n 'parse-options' -- "$@") || usage
 eval set -- "$opts"
 while true; do
   case "$1" in
@@ -52,6 +53,7 @@ while true; do
     -p | --path ) path="$2"; shift 2 ;;
     -P | --prefix ) prefix="$2"; shift 2 ;;
     -d | --dns-path ) dns_path="$2"; shift 2 ;;
+    -r | --reverse ) reverse=true; shift ;;
     -- ) shift; break ;;
     * ) break ;;
   esac
@@ -59,7 +61,8 @@ done
 
 path="${path:-${1:-$default_prefix}}"
 base=$(basename $(dirname $path))
-default_dns_path="salt/profile/dns/files/${base#*_}/dns-${base//_/.}"
+domain="${base//_/.}"
+default_dns_path="salt/profile/dns/files/${base#*_}/dns-$domain"
 dns_path="${dns_path:-$default_dns_path}"
 
 export prefix
@@ -73,5 +76,11 @@ yq -r 'to_entries[] | [.key, .value.mac] | @tsv' $path | while read -r host mac;
     if [ "$offline" != "true" ]; then
         ping -q -c1 $ip >/dev/null || continue
     fi
-    echo "$host       AAAA  $ip"
+    if [ "$reverse" = "true" ]; then
+        echo "$host       AAAA  $ip"
+        sipcalc -r $ip | sed -n "s/ip6\.arpa\./&     14400 PTR $host.$domain./p"
+        continue
+    else
+        echo "$host       AAAA  $ip"
+    fi
 done
