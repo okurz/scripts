@@ -18,7 +18,7 @@ Options:
  -o, --offline               Output also host entries for hosts that are
                              offline or do not respond to a ping request.
  -p <path>, --path <path>    set different <path> to a hosts.yaml file,
-                             by default '$path'
+                             by default '$default_path'
  -P <P>, --prefix <P>        IPv6 address prefix, default '$default_prefix'
  -u, --unique                Output no already existing AAAA records if found
                              in <dns_path>.
@@ -59,25 +59,25 @@ while true; do
   esac
 done
 
-path="${path:-${1:-$default_prefix}}"
-base=$(basename $(dirname $path))
+path="${path:-${1:-$default_path}}"
+base="$(basename "$(dirname "$path")")"
 domain="${base//_/.}"
 default_dns_path="salt/profile/dns/files/${base#*_}/dns-$domain"
 dns_path="${dns_path:-$default_dns_path}"
 
 export prefix
 
-yq -r 'to_entries[] | [.key, .value.mac] | @tsv' $path | while read -r host mac; do
-    ip=$(mac-to-ipv6 $mac)
+yq -r 'to_entries[] | [.key, .value.mac] | @tsv' "$path" | while read -r host mac; do
+    ip=$(mac-to-ipv6 "$mac")
     ip=${ip,,}
     if [ "$unique" = "true" ]; then
-        grep -q $ip $dns_path && continue
+        grep -q "$ip" "$dns_path" && continue
     fi
     if [ "$offline" != "true" ]; then
-        ping -q -c1 $ip >/dev/null || continue
+        ping -q -c1 "$ip" >/dev/null || continue
     fi
     if [ "$reverse" = "true" ]; then
-        sipcalc -r $ip | sed -n "s/ip6\.arpa\./&     14400 PTR $host.$domain./p"
+        sipcalc -r "$ip" | sed -n "s/ip6\.arpa\./&     14400 PTR $host.$domain./p"
         continue
     else
         echo "$host       AAAA  $ip"
