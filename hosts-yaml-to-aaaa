@@ -77,7 +77,6 @@ yq -r 'to_entries[] | [.key, .value.mac] | @tsv' $path | while read -r host mac;
         ping -q -c1 $ip >/dev/null || continue
     fi
     if [ "$reverse" = "true" ]; then
-        echo "$host       AAAA  $ip"
         sipcalc -r $ip | sed -n "s/ip6\.arpa\./&     14400 PTR $host.$domain./p"
         continue
     else
