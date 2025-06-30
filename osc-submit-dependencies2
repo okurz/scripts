@@ -1,0 +1,8 @@
+#!/bin/sh -e
+prj="${1:?"Need project in OBS, e.g. home:$USER"}"
+src="${src:-"openSUSE:Factory"}"
+while :; do
+    result=$(osc api /build/$prj/_result) && echo $result | grep -q "state.*building" && echo "$(date -Is) project building, waiting …" && sleep 60 && continue; unresolvables=$(osc api /build/$prj/_result | xq -r '.resultlist.result | .[].status | .[] | select(.["@code"]=="unresolvable") | .details' | sed -e "s/nothing provides //g" -e "s/, /\n/g" -e "s/ .*=.*$//" | sort | uniq) && echo "unresolvables: $unresolvables" && for i in $unresolvables; do
+        dep=$(echo $i | sed -e "s/(/-/" -e "s/::/-/g" -e "s/)//" -e "s/python3[0-9]*/python/") && echo "Adding \"$dep\"" && osc linkpac $src $dep $prj
+    done
+done
