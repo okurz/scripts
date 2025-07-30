@@ -1,0 +1,6 @@
+#!/bin/sh -e
+# project id can be found using
+# 'curl -sS --header "PRIVATE-TOKEN: $(cat ~/.gitlab_access_token_suse_de)" # "https://gitlab.suse.de/api/v4/projects?search=bot-ng" | jq ".[0].id"' or from https://gitlab.suse.de/qa-maintenance/bot-ng/edit
+prj_id=6096
+job_id=$(curl -sS --header "PRIVATE-TOKEN: $(cat ~/.gitlab_access_token_suse_de)" https://gitlab.suse.de/api/v4/projects/$prj_id/jobs | jq '.[] | select(.name == "approve incidents" and .status == "success") | .id' | head -n 1)
+for i in $(curl -sS https://gitlab.suse.de/qa-maintenance/bot-ng/-/jobs/$job_id/raw | sed -n 's@^.*not-ignored job.*/t\(\S*\).*$@\1@p'); do curl -sS https://openqa.suse.de/api/v1/jobs/$i | jq -r '"https://openqa.suse.de/t\(.job.id): \(.job.group) / \(.job.parent_group)"'; done | grep '\(Container\|Cloud\|SLEM\|Minimal.*VM\)'
