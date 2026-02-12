@@ -4,7 +4,6 @@ all:
 .PHONY: test
 test: checkstyle test-unit
 
-# for now no tests anymore in test/ after retry moved to github.com/okurz/retry
 .PHONY: test-unit
 test-unit: test-more-bash test-python
 	prove -r test/
