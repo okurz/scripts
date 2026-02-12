@@ -1,1 +1,11 @@
-xrandr --newmode "3440x1440_30.00"  196.90  3440 3600 3960 4480  1440 1441 1444 1465  -HSync +Vsync ; xrandr --addmode DP-1-3 "3440x1440_30.00" ; xrandr --output DP-1-3 --off && sleep .3 && xrandr --output DP-1-3 --mode "3440x1440_30.00" --right-of eDP-1 --crtc 0
+#!/bin/sh -e
+set -euo pipefail
+modeline=$(gtf 3440 1440 30 | sed -n -e 's/"//g' -e 's/\s*Modeline\s//p')
+xrandr --newmode $modeline ||:
+outputs=$(xrandr | sed -n "s/^\(DP.*\) connected.*/\1/p")
+if [[ $outputs =~ "DP-1-3" ]]; then
+    xrandr --output DP-1-3 --off && sleep .3 && xrandr --addmode DP-1-3 3440x1440_30.00; xrandr --output DP-1-3 --mode 3440x1440_30.00 --right-of eDP-1 --crtc 0
+fi
+while read output; do
+    xrandr --addmode $output 3440x1440_30.00; xrandr --output $output --mode 3440x1440_30.00 --right-of eDP-1 ||:
+done <<< $outputs
