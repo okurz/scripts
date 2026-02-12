@@ -1,1 +1,1 @@
-for i in *.{JPG,jpg} ; do mogrify -verbose -quality 80% $i ; jhead -ft $i ; done
+mogrify -verbose -define preserve-timestamp=true -quality 80% *.{JPG,jpg}
