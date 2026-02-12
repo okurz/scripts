@@ -6,7 +6,6 @@ http://stackoverflow.com/questions/623764/find-non-utf8-filenames-on-linux-file-
 """
 
 
-import shutil
 import os
 import os.path
 def walk(dir):
@@ -17,14 +16,15 @@ def walk(dir):
                 yield descendant
         yield child
 
-l = []
+paths = []
 for path in walk('.'):
     try:
-        u= unicode(path, 'utf-8')
+        u= unicode(path, 'utf-8')  # noqa: F821
     except UnicodeError:
-        l.append(path)
+        paths.append(path)
 
 # TODO to delete use something like:
+#import shutil
 # print path, or attempt to rename file
 #print(path)
 #for i in l:
