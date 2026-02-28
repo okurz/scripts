@@ -1,0 +1,5 @@
+subject="$1"
+body="$2"
+shift 2
+
+git commit -m "$subject" -m "$(echo "$body" | fmt -w 80)" "$@"
