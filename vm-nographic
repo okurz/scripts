@@ -1,0 +1,4 @@
+#!/bin/sh -e
+#sda="${hda:-"/dev/sda"}"
+#-snapshot -hda $sda
+qemu-system-x86_64 -enable-kvm -m 4096 -nographic -serial mon:stdio -smp 4 $@
