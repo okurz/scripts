@@ -1,0 +1,1 @@
+env OLLAMA_HOST=http://okpc4:11434 ollama $@
