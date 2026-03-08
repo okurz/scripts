@@ -1,3 +1,7 @@
 #!/bin/sh -e
 target="${target:-"$USER"}"
-git push $target && git show --no-patch --format=%B | hub pull-request -F - $@
+branch=$(git branch --show-current)
+title=$(git log -1 --format=%s)
+body=$(git log -1 --format=%b)
+
+git push "$target" "$branch" && gh pr create --head "$target:$branch" --title "$title" --body "$body" "$@"
