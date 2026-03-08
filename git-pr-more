@@ -1,7 +1,12 @@
 #!/bin/sh -e
 target="${target:-"$USER"}"
 subject="${1:?"Need PR subject line"}"
-branch=$(git rev-parse --abbrev-ref HEAD)
-git push $target --force-with-lease $branch && (echo -e "$subject\n\n" && \
-base=$(git branch -a | grep 'origin/\(master\|main\)' | tail -n1)
-git log --pretty='* %s' $base..) | hub pull-request -F -
+shift
+branch=$(git branch --show-current)
+base=$(git branch -a | grep -o 'origin/\(master\|main\)' | tail -n1)
+
+# Push the branch to the target fork
+git push --force-with-lease "$target" "$branch"
+
+# Create the PR with the custom title and commit list as the body
+git log --pretty='* %s' "$base.." | gh pr create --head "$target:$branch" --title "$subject" --body-file - "$@"
