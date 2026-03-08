@@ -1,0 +1,4 @@
+#!/bin/sh -e
+pflash_code="${pflash_code:-/usr/share/qemu/ovmf-x86_64-ms-code.bin}"
+pflash_vars="${pflash_vars:-/usr/share/qemu/ovmf-x86_64-ms-vars.bin}"
+sudo qemu-system-x86_64 -enable-kvm -only-migratable -m 4096 -nographic -serial mon:stdio -smp 4 -drive id=pflash-code,if=pflash,file=$pflash_code,format=raw,unit=0,readonly=on -drive id=pflash-vars-overlay0,if=pflash,file=$pflash_vars,unit=1 $@
