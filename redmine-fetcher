@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+import requests
+
+
+def load_config():
+    config_path = Path.home() / ".query_redminerc"
+    if config_path.exists():
+        config = {}
+        for line in config_path.read_text().strip().splitlines():
+            if "=" in line:
+                key, val = line.split("=", 1)
+                config[key.strip()] = val.strip()
+        return config.get("host"), config.get("token")
+    return None, None
+
+
+DEFAULT_HOST = "progress.opensuse.org"
+CONFIG_HOST, CONFIG_TOKEN = load_config()
+
+
+def fetch_ticket(ticket_id):
+    host = os.environ.get("REDMINE_HOST", CONFIG_HOST) or DEFAULT_HOST
+    token = os.environ.get("REDMINE_API_TOKEN", CONFIG_TOKEN)
+
+    url = f"https://{host}/issues/{ticket_id}.json?include=journals"
+    headers = {}
+    if token:
+        headers["X-Redmine-API-Key"] = token
+
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        issue = data.get("issue", {})
+
+        print(f"## Issue #{issue.get('id')}: {issue.get('subject')}")
+        print(f"- Status: {issue.get('status', {}).get('name')}")
+        print(f"- Priority: {issue.get('priority', {}).get('name')}")
+        print(f"- Assignee: {issue.get('assigned_to', {}).get('name', 'None')}")
+        print(f"- URL: https://{host}/issues/{ticket_id}")
+        print("\n### Description")
+        print(issue.get("description"))
+
+        journals = issue.get("journals", [])
+        if journals:
+            print("\n### Journals")
+            for journal in journals:
+                notes = journal.get("notes")
+                if notes:
+                    user = journal.get("user", {}).get("name")
+                    created = journal.get("created_on")
+                    print(f"#### {user} at {created}")
+                    print(notes)
+                    print("-" * 20)
+    except requests.RequestException as e:
+        print(f"Error fetching ticket {ticket_id}: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python redmine_fetcher.py <ticket_id>")
+        sys.exit(1)
+
+    ticket_id = sys.argv[1]
+    if ticket_id.startswith("http"):
+        ticket_id = ticket_id.rstrip("/").split("/")[-1]
+        if "." in ticket_id:
+            ticket_id = ticket_id.split(".")[0]
+
+    fetch_ticket(ticket_id)
