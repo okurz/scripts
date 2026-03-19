@@ -1,0 +1,45 @@
+#!/bin/bash -e
+set -euo pipefail
+
+list_pkgs() {
+    prj="${1:?"Need project"}"
+    osc list "$prj"
+}
+
+unresolvables_per_pkg() {
+    echo "# unresolvables_per_pkg"
+    local prj="${prj:-"home:okurz:try_openqa_leap16"}"
+    local repo="${repo:-"16.0"}"
+    local arch="${arch:-"$arch"}"
+    local pkgs="$(list_pkgs "$prj")"
+    osc buildinfo "$prj" "$pkg" "$repo" "$arch" | xml_grep --nowrap --text_only error | sed -n "s/nothing provides //gp"
+}
+
+unresolvables_in_prj() {
+    echo "# unresolvables_in_prj"
+    local prj="${prj:-"home:okurz:try_openqa_leap16"}"
+    local repo="${repo:-"16.0"}"
+    local arch="${arch:-"$arch"}"
+    while read -r pkg; do
+        echo "## pkg: $pkg"
+        # this shows all unresolvables, for multiple comma separate messages. And
+        # for some with exact version which we should strip. Also we should remove
+        # packages already in this project but unresolved
+        unresolvables_per_pkg "$prj" "$pkg" "$repo" "$arch"
+    done <<<$pkgs
+}
+
+find_unresolvables() {
+    local prj="${prj:-"home:okurz:try_openqa_leap16"}"
+    local repo="${repo:-"16.0"}"
+    local arch="${arch:-"x86_64"}"
+    local pkgs="$(list_pkgs "$prj")"
+    local base_prj="${base_prj:-"openSUSE:Factory"}"
+    unresolvables=$(unresolvables_in_prj "$prj")
+}
+
+main() {
+    find_unresolvables
+}
+
+caller 0 > /dev/null || main "$@"
