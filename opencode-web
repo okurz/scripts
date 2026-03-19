@@ -1,0 +1,1 @@
+OPENCODE_SERVER_USERNAME=$USER OPENCODE_SERVER_PASSWORD=$(cat ~/.config/opencode/.opencode_web_password) opencode web --mdns --port 4096
