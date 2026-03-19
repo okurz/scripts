@@ -1,0 +1,2 @@
+sudo flatpak override --env=SIGNAL_PASSWORD_STORE=kwallet6 org.signal.Signal
+flatpak run org.signal.Signal
