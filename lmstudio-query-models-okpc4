@@ -1,0 +1,1 @@
+curl -s -H "Authorization: Bearer $(cat ~/.lmstudio_okpc4_token)" -H "Content-Type: application/json" http://okpc4.fritz.box:1234/v1/models
