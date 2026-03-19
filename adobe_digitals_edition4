@@ -1,0 +1,1 @@
+WINEARCH=win32 WINEPREFIX=~/.wine_32b_ade wine ~/.wine_32b_ade/drive_c/Program\ Files/Adobe/Adobe\ Digital\ Editions\ 4.5/DigitalEditions.exe
