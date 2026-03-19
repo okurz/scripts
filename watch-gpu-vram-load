@@ -1,0 +1,2 @@
+watch -n 1 "echo 'GPU Load: '\$(cat /sys/class/drm/card1/device/gpu_busy_percent)% && echo 'VRAM Used: '\$(( \$(cat /sys/class/drm/card1/device/mem_info_vram_used) / 1024 / 1024 )) MB / \$(( \$(cat /sys/class/drm/card1/device/mem_info_vram_total) / 1024 / 1024 )) MB"
+okurz@linux-28d8:~/local/tmp 0 (main) $ ^Ctch -n 1 "echo 'GPU Load: '\$(cat /sys/class/drm/card1/device/gpu_busy_percent)% && echo 'VRAM Used: '\$(( \$(cat /sys/class/drm/card1/device/mem_info_vram_used) / 1024 / 1024 )) MB / \$(( \$(cat /sys/class/drm/card1/device/mem_info_vram_total) / 1024 / 1024 )) MB"
