@@ -1,0 +1,1 @@
+for i in $(git branch-raw); do git co $i && git rp || break ; done
