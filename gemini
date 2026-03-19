@@ -1,0 +1,1 @@
+unset GOOGLE_CLOUD_PROJECT; /home/okurz/.npm-packages/bin/gemini $@
