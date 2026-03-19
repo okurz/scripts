@@ -1,0 +1,93 @@
+#!/usr/bin/env python
+
+"""
+Find all 'unresolvables' for an OBS project
+
+This can be used to identify which additional direct and indirect dependencies of packages in a project need to be submitted additionally.
+
+Examples:
+  $0 home:okurz:my_project
+  $0 home:okurz:my_project my_package
+"""
+
+import argparse
+import logging
+import subprocess
+import sys
+
+logging.basicConfig()
+log = logging.getLogger(sys.argv[0] if __name__ == "__main__" else __name__)
+
+
+class CustomFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    """Preserve multi-line __doc__ and provide default arguments in help strings."""
+    pass
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=CustomFormatter)
+    parser.add_argument('-v', '--verbose',
+                        help="Increase verbosity level, specify multiple times to increase verbosity", action='count', default=1)
+    parser.add_argument('--dry-run', action='store_true',
+                        help="Do not do any write actions on any target")
+    parser.add_argument('--project',
+                        help="OBS project to list packages for")
+    parser.add_argument('--package',
+                        help="Only list unresolvables for specified package, otherwise shows for all packages in the project")
+    args = parser.parse_args()
+    verbose_to_log = {
+        0: logging.CRITICAL,
+        1: logging.ERROR,
+        2: logging.WARN,
+        3: logging.INFO,
+        4: logging.DEBUG
+    }
+    logging_level = logging.DEBUG if args.verbose > 4 else verbose_to_log[args.verbose]
+    log.setLevel(logging_level)
+    return args
+
+
+def call(cmds, dry_run=False):
+    log.debug("call: %s" % cmds)
+    return subprocess.call((['echo', 'Simulating: '] if dry_run else []) + cmds)
+
+
+def default_repo(prj):
+    meta = call(['osc', 'meta', 'prj', prj])
+    assert meta
+    #xml_grep --nowrap repository "$prj" | sed -n "s/^.*name=\"\([^\"]*\).*$/\1/p")
+
+def list_unresolvables():
+    pass
+
+def main():
+    args = parse_args()
+    call(['ssh', args.openqa_host] + ['sudo -u geekotest psql -t --command="{sql_query}" openqa'.format(sql_query=sql_query)], args.dry_run)
+
+
+#def list_unresolvables_for_pkg():
+    #prj="${1?"Need project"}"
+    #pkg="${2?"Need package"}"
+    #repo="${3?"Need repo"}"
+    #arch="${4:-"x86_64"}"
+
+    #osc buildinfo "$prj" os-autoinst 16.0 x86_64 | xml_grep error --text_only | sed -n "s/^.*provides //p"
+#}
+
+#main() {
+    #prj="${1?"Need project"}"
+    #osc="${osc:-"$(command -v osc)"}"
+    #pkg="${2:-""}"
+    #repo="${3:-""}"
+    #arch="${arch:-"x86_64"}"
+    #if [[ -n $repo ]]; then
+    #if [[ -n $pkg ]]; then
+        #list_unresolvables_for_pkg "$prj" "$pkg" "$repo" "$arch"
+    ##else
+         ##while read pkg <<<$(osc list $prj); do
+              ###list_unresolvables_for_pkg $pkg
+         ##done
+    #fi
+#}
+
+#main "$@"
