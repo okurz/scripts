@@ -2,35 +2,45 @@
 import json
 import subprocess
 import concurrent.futures
+import typer
+from typing import Optional
 
-def run_gh(args):
+app = typer.Typer(help="List GitHub PRs needing review in Slack-compatible format.")
+
+def run_gh(args: list[str]) -> Optional[str]:
+    """Execute a gh CLI command and return its stdout."""
     try:
-        res = subprocess.run(['gh'] + args, capture_output=True, text=True, check=True)
+        res = subprocess.run(["gh"] + args, capture_output=True, text=True, check=True)
         return res.stdout.strip()
     except subprocess.CalledProcessError:
         return None
 
-def check_pr(pr):
-    url, title = pr['url'], pr['title']
-    # Skip review check if it's already filtered or if we hit repo-specific token issues
-    decision = run_gh(['pr', 'view', url, '--json', 'reviewDecision', '--jq', '.reviewDecision'])
+def check_pr(pr: dict) -> Optional[str]:
+    """Verify if a PR has changes requested; returns Slack-formatted string if not."""
+    url, title = pr["url"], pr["title"]
+    # Manual check for reviewDecision as gh search filters can be inconsistent/rate-limited
+    decision = run_gh(["pr", "view", url, "--json", "reviewDecision", "--jq", ".reviewDecision"])
     if decision != "CHANGES_REQUESTED":
         return f"* {url} {title}"
     return None
 
-def main():
-    # Fetch open PRs with passing checks that aren't drafts
-    query = 'gh search prs --author @me --state open --checks success --limit 100 --json url,title,repository,isDraft'
-    raw_prs = run_gh(query.split()[1:])
+@app.command()
+def list_prs(
+    limit: int = typer.Option(100, help="Maximum number of PRs to search."),
+    workers: int = typer.Option(10, help="Number of parallel workers for status checks."),
+):
+    """Fetch and display open, CI-passing PRs by current user without changes requested."""
+    # Fetch metadata for open, non-draft PRs with successful checks
+    query = f"search prs --author @me --state open --checks success --limit {limit} --json url,title,repository,isDraft"
+    raw_prs = run_gh(query.split())
     if not raw_prs:
         return
-
-    prs = [p for p in json.loads(raw_prs) if not p['isDraft']]
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    prs = [p for p in json.loads(raw_prs) if not p["isDraft"]]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         results = list(executor.map(check_pr, prs))
-
-    print('\n'.join(filter(None, results)))
+    output = "\n".join(filter(None, results))
+    if output:
+        typer.echo(output)
 
 if __name__ == "__main__":
-    main()
+    app()
