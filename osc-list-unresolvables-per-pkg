@@ -1,0 +1,17 @@
+#!/bin/bash -e
+set -euo pipefail
+
+unresolvables_per_pkg() {
+    local prj="${1:?"Need prj"}"
+    local pkg="${2:?"Need pkg"}"
+    local repo="${3:?"Need repo"}"
+    local arch="${4:?"Need arch"}"
+    osc buildinfo "$prj" "$pkg" "$repo" "$arch" | xml_grep --nowrap --text_only error | sed -n "s/nothing provides //gp"
+}
+
+main() {
+    unresolvables_per_pkg "$1" "$2" "$3" "$4"
+}
+
+caller 0 > /dev/null || main "$@"
+
