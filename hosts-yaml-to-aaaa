@@ -47,7 +47,7 @@ eval set -- "$opts"
 while true; do
   case "$1" in
     -v | --verbose ) set -x; shift ;;
-    -h | --help ) usage; shift ;;
+    -h | --help ) usage; ;;
     -u | --unique ) unique=true; shift ;;
     -o | --offline ) offline=true; shift ;;
     -p | --path ) path="$2"; shift 2 ;;

@@ -108,7 +108,7 @@ def main():
             tries_left -= 1
             time.sleep(1)
         
-        if redir_found == False:
+        if not redir_found:
             print(f"\n❌ Failed to get redirected to correct URL, got {current_url} instead")
             
         code = re.search(
