@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+import re
+import sys
+import typer
+from typing import List, Optional
+
+app = typer.Typer(help="Parse unresolvable dependencies and suggest source packages to sync.")
+
+def get_source_pkg(binary_pkg: str):
+    """
+    Maps a binary package name (e.g., python313-foo) to a likely source package name (e.g., python-foo).
+    """
+    # Strip potential trailing parenthesis or other chars
+    binary_pkg = binary_pkg.strip("()")
+    
+    # Common mapping for python packages in openSUSE
+    if binary_pkg.startswith("python3"):
+        # Match python311-foo, python313-foo, etc.
+        match = re.match(r"python\d+-(.*)", binary_pkg)
+        if match:
+            pkg_name = match.group(1)
+            return f"python-{pkg_name}"
+    
+    return binary_pkg
+
+@app.command()
+def suggest(
+    input_file: Optional[typer.FileText] = typer.Argument(
+        None, help="File containing 'nothing provides' lines. If omitted, reads from stdin."
+    )
+):
+    """
+    Suggest source packages to sync from Factory based on unresolvable binary packages.
+    """
+    if input_file:
+        input_text = input_file.read()
+    else:
+        if sys.stdin.isatty():
+            typer.echo("Error: Please provide an input file or pipe the output of 'get_pr_status' to this command.", err=True)
+            raise typer.Exit(code=1)
+        input_text = sys.stdin.read()
+    
+    # Regex to find "nothing provides BINARY_PKG >= VERSION"
+    # We strip potential leading parentheses and focus on the package name
+    pattern = re.compile(r"nothing provides \(?(\S+)")
+    binary_pkgs = pattern.findall(input_text)
+    
+    if not binary_pkgs:
+        typer.echo("No dependencies found in input.")
+        return
+
+    source_pkgs = set()
+    for b in binary_pkgs:
+        s = get_source_pkg(b)
+        source_pkgs.add(s)
+    
+    typer.echo("\n--- Identified Source Packages to Sync ---")
+    for s in sorted(source_pkgs):
+        typer.echo(s)
+    
+    typer.echo("\n--- Suggested Commands ---")
+    typer.echo("# Run these for each package to sync them from Factory to Leap")
+    for s in sorted(source_pkgs):
+        typer.echo(f"# For {s}:")
+        typer.echo(f"  # 1. Ensure you have a fork and clone of pool/{s}")
+        typer.echo(f"  # 2. cd {s}")
+        typer.echo(f"  # 3. osc-sync-leap")
+        typer.echo("")
+
+if __name__ == "__main__":
+    app()
