@@ -1,0 +1,1 @@
+diff -Naur <(curl -sS https://download.suse.de/ibs/SUSE:/SLFO:/Products:/SLES:/16.0/product/repo/SLES-16.0-x86_64/x86_64/?P=kernel-livepatch*.rpm) <(curl -sS https://download.suse.de/ibs/SUSE:/SLFO:/Products:/SLES:/16.0:/TEST/product/repo/SLES-16.0-x86_64/x86_64/?P=kernel-livepatch*.rpm) | grep \.rpm
