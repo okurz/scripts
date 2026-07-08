@@ -1,7 +1,15 @@
 #!/bin/sh -e
 target="${target:-"$USER"}"
 branch=$(git branch --show-current)
-title=$(git log -1 --format=%s)
-body=$(git log -1 --format=%b)
+
+ref="HEAD"
+# Check if the first argument is a valid git commit/reference
+if [ -n "$1" ] && git rev-parse --verify "$1" >/dev/null 2>&1; then
+    ref="$1"
+    shift
+fi
+
+title=$(git log -1 "$ref" --format=%s)
+body=$(git log -1 "$ref" --format=%b)
 
 git push "$target" "$branch" && gh pr create --head "$target:$branch" --title "$title" --body "$body" "$@"
