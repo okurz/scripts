@@ -1,0 +1,1 @@
+cd ~/local/standup-timer && env PORT=3002 ADMIN_TOKEN=$(cat ~/.standup_timer_admin_tokenrc) npm start
