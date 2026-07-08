@@ -1,0 +1,55 @@
+#!/bin/bash
+
+# Find the opencode executable
+OPENCODE_BIN=$(which opencode 2>/dev/null)
+if [ -z "$OPENCODE_BIN" ]; then
+    # Fallback to standard location
+    OPENCODE_BIN="/home/okurz/.npm-packages/bin/opencode"
+fi
+
+if [ ! -f "$OPENCODE_BIN" ]; then
+    echo "Error: opencode executable not found" >&2
+    exit 1
+fi
+
+# The directory we are currently working in (absolute path)
+WORKSPACE=$(pwd -P)
+
+# Determine user home directory and name
+USER_HOME="/home/okurz"
+
+# Execute bubblewrap sandbox
+exec bwrap \
+    --ro-bind / / \
+    --dev /dev \
+    --proc /proc \
+    --tmpfs /tmp \
+    --tmpfs "$USER_HOME" \
+    `# Bind the workspace (read-write)` \
+    --bind "$WORKSPACE" "$WORKSPACE" \
+    `# Bind opencode config, data, cache, state and node modules (read-write)` \
+    --bind "$USER_HOME/.config/opencode" "$USER_HOME/.config/opencode" \
+    --bind "$USER_HOME/.local/share/opencode" "$USER_HOME/.local/share/opencode" \
+    --bind "$USER_HOME/.local/state/opencode" "$USER_HOME/.local/state/opencode" \
+    --bind "$USER_HOME/.cache/opencode" "$USER_HOME/.cache/opencode" \
+    --bind "$USER_HOME/.npm-packages" "$USER_HOME/.npm-packages" \
+    `# Bind necessary secrets and configs (read-only)` \
+    --ro-bind "$USER_HOME/.gitconfig" "$USER_HOME/.gitconfig" \
+    --ro-bind-try "$USER_HOME/bin" "$USER_HOME/bin" \
+    --ro-bind-try "$USER_HOME/.lmstudio_okpc4_token" "$USER_HOME/.lmstudio_okpc4_token" \
+    --ro-bind-try "$USER_HOME/.suse_gemini_cloud_project_id" "$USER_HOME/.suse_gemini_cloud_project_id" \
+    --ro-bind-try "$USER_HOME/.config/gcloud" "$USER_HOME/.config/gcloud" \
+    --ro-bind-try "$USER_HOME/.gnupg" "$USER_HOME/.gnupg" \
+    --bind-try "/run/user/$(id -u)/gnupg" "/run/user/$(id -u)/gnupg" \
+    --bind-try "/run/user/$(id -u)/bus" "/run/user/$(id -u)/bus" \
+    --setenv DBUS_SESSION_BUS_ADDRESS "unix:path=/run/user/$(id -u)/bus" \
+    --setenv FORCE_COLOR 3 \
+    --setenv CLICOLOR_FORCE 1 \
+    `# Share network namespace (needed to contact LLM APIs)` \
+    --share-net \
+    --unshare-user \
+    --unshare-ipc \
+    --unshare-pid \
+    --unshare-uts \
+    --unshare-cgroup \
+    -- "$OPENCODE_BIN" "$@"
