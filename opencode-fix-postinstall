@@ -1,0 +1,1 @@
+(cd ~/.npm-packages/lib/node_modules/opencode-ai/ && node postinstall.mjs)
