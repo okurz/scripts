@@ -1,6 +1,10 @@
 #!/bin/sh -e
 base=$(git branch -a | grep 'origin/\(master\|main\)' | tail -n1)
+current=$(git branch --show-current 2>/dev/null)
 for i in $(git branch-raw); do
+    if [ "$i" = "$current" ] || [ "$i" = "master" ] || [ "$i" = "main" ]; then
+        continue
+    fi
     if [ "$(git log1 $base..$i | wc -l)" = "0" ]; then
         git branch -D $i
     fi
