@@ -1,0 +1,2 @@
+#!/bin/sh -e
+ while :; do countdown $1 && for i in {1..7}; do printf '\07'; sleep .3; done; done
