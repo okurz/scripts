@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Remove my review requests from draft and/or forwarded pull requests on a Gitea instance."""
+from __future__ import annotations
+
+import sys
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import httpx
+import typer
+
+app = typer.Typer(add_completion=False, no_args_is_help=True)
+
+DEFAULT_BASE_URL = "https://src.opensuse.org"
+DEFAULT_TOKEN_FILE = "~/.gitea_src_opensuse_org_token_public_rw"
+PAGE_SIZE = 100
+MAX_RETRIES = 5
+BASE_BACKOFF_S = 2.0
+REQUEST_TIMEOUT_S = 30.0
+THROTTLE_STATUSES = frozenset({403, 429, 502, 503})
+
+
+class APIError(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class PullMatch:
+    repo: str
+    number: int
+    title: str
+    draft: bool
+
+    @property
+    def label(self) -> str:
+        return f"{self.repo}!{self.number}"
+
+
+def is_forwarded(match: PullMatch) -> bool:
+    return match.title.startswith("Forwarded PRs:")
+
+
+SELECTORS: dict[str, Callable[[PullMatch], bool]] = {
+    "drafts": lambda m: m.draft,
+    "forwarded": is_forwarded,
+    "both": lambda m: m.draft or is_forwarded(m),
+}
+
+
+def load_token(path: Path) -> str:
+    if not path.is_file():
+        typer.echo(f"error: token file not found: {path}", err=True)
+        raise typer.Exit(code=2)
+    token = path.read_text().strip()
+    if not token:
+        typer.echo(f"error: token file is empty: {path}", err=True)
+        raise typer.Exit(code=2)
+    return token
+
+
+def is_throttled(response: httpx.Response) -> bool:
+    if response.status_code in THROTTLE_STATUSES:
+        return True
+    return "application/json" not in response.headers.get("content-type", "")
+
+
+def request(
+    client: httpx.Client,
+    method: str,
+    path: str,
+    body: dict[str, list[str]] | None = None,
+) -> tuple[int, Any]:
+    """Issue a request, retrying with exponential backoff on throttling."""
+    for attempt in range(MAX_RETRIES):
+        if attempt:
+            time.sleep(BASE_BACKOFF_S * (2 ** (attempt - 1)))
+        response = client.request(method, path, json=body)
+        if is_throttled(response):
+            continue
+        if response.status_code in (404, 410):
+            return response.status_code, None
+        if response.status_code >= 400:
+            raise APIError(f"{method} {path} -> {response.status_code}: {response.text[:140]}")
+        return response.status_code, response.json() if response.content else None
+    raise APIError(f"{method} {path}: still throttled after {MAX_RETRIES} attempts")
+
+
+def item_to_match(item: dict[str, Any]) -> PullMatch:
+    return PullMatch(
+        repo=item["repository"]["full_name"],
+        number=item["number"],
+        title=item.get("title", ""),
+        draft=bool(item.get("pull_request", {}).get("draft")),
+    )
+
+
+def search_review_requested(client: httpx.Client) -> list[PullMatch]:
+    matches: list[PullMatch] = []
+    page = 1
+    while True:
+        url = (
+            "/api/v1/repos/issues/search"
+            f"?review_requested=true&type=pulls&state=open&limit={PAGE_SIZE}&page={page}"
+        )
+        _, payload = request(client, "GET", url)
+        items = payload if isinstance(payload, list) else payload.get("data", [])
+        matches.extend(item_to_match(item) for item in items)
+        if len(items) < PAGE_SIZE:
+            return matches
+        page += 1
+
+
+@app.command()
+def main(
+    base_url: str = typer.Option(
+        DEFAULT_BASE_URL, "--base-url", help="Gitea instance base URL."
+    ),
+    token_file: Path = typer.Option(
+        Path(DEFAULT_TOKEN_FILE),
+        "--token-file",
+        help="File containing the API token.",
+    ),
+    select: str = typer.Option(
+        "both",
+        "--select",
+        help="Which PRs to unassign: drafts | forwarded | both.",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Only list matching PRs, change nothing."
+    ),
+    limit: int = typer.Option(
+        0, "--limit", help="Safety cap on the number of PRs to process (0 = no cap)."
+    ),
+    request_delay: float = typer.Option(
+        0.1, "--request-delay", help="Delay in seconds between unassign requests."
+    ),
+) -> None:
+    selector = SELECTORS.get(select)
+    if selector is None:
+        raise typer.BadParameter(f"--select must be one of: {', '.join(SELECTORS)}")
+    token = load_token(token_file.expanduser())
+
+    with httpx.Client(
+        base_url=base_url.rstrip("/"),
+        headers={"Authorization": f"token {token}"},
+        timeout=REQUEST_TIMEOUT_S,
+    ) as client:
+        _, me = request(client, "GET", "/api/v1/user")
+        login = me["login"]
+        typer.echo(f"acting as {login} on {client.base_url}")
+
+        matches = [m for m in search_review_requested(client) if selector(m)]
+        capped = matches[:limit] if limit else matches
+        typer.echo(
+            f"review-requested open PRs matching: {len(matches)}"
+            + (f" | capped to {len(capped)}" if limit else "")
+        )
+        if dry_run:
+            for match in capped:
+                tags = [tag for tag, hit in (("draft", match.draft), ("forwarded", is_forwarded(match))) if hit]
+                typer.echo(f"would unassign {match.label} [{'+'.join(tags)}]")
+            return
+
+        unassigned = skipped = 0
+        failed: list[str] = []
+        for match in capped:
+            try:
+                status, _ = request(
+                    client,
+                    "DELETE",
+                    f"/api/v1/repos/{match.repo}/pulls/{match.number}/requested_reviewers",
+                    body={"reviewers": [login]},
+                )
+                status_label = "skip" if status in (404, 410) else "unassigned"
+                typer.echo(f"{status_label} {match.label}")
+                skipped += status in (404, 410)
+                unassigned += status not in (404, 410)
+            except APIError as err:
+                failed.append(f"{match.label}: {err}")
+                typer.echo(f"FAILED {err}", err=True)
+            if request_delay:
+                time.sleep(request_delay)
+
+        capped_keys = {(m.repo, m.number) for m in capped}
+        remaining = [
+            m
+            for m in search_review_requested(client)
+            if selector(m) and (m.repo, m.number) in capped_keys
+        ]
+        typer.echo(
+            f"done: unassigned={unassigned} skipped={skipped} failed={len(failed)}"
+            f" | still requesting my review: {len(remaining)}"
+        )
+        for match in remaining:
+            typer.echo(f"  remaining: {match.label}")
+        if failed:
+            typer.echo("failures:", err=True)
+            for msg in failed:
+                typer.echo(f"  {msg}", err=True)
+        if failed or remaining:
+            raise typer.Exit(code=1)
+
+
+if __name__ == "__main__":
+    sys.exit(app())
