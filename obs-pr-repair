@@ -34,6 +34,7 @@ class HealthStatus(str, Enum):
     HEALTHY = "HEALTHY"
     BROKEN_EMPTY_PROJECT = "BROKEN_EMPTY_PROJECT"
     BROKEN_UNBRANCHED_PACKAGE = "BROKEN_UNBRANCHED_PACKAGE"
+    BROKEN_EXCLUDED_OR_DISABLED = "BROKEN_EXCLUDED_OR_DISABLED"
     NOT_FOUND = "NOT_FOUND"
     UNKNOWN = "UNKNOWN"
 
@@ -68,6 +69,7 @@ class DiagnosticReport:
     packages: list[str] = field(default_factory=list)
     package_files: list[str] = field(default_factory=list)
     build_results: str = ""
+    all_results_excluded_or_disabled: bool = False
     status: HealthStatus = HealthStatus.UNKNOWN
     suggested_action: str = ""
 
@@ -328,8 +330,40 @@ def get_build_results(
     project: str, runner: CommandRunner = default_runner
 ) -> str:
     """Fetch build results summary for project."""
-    res = runner(["osc", "results", project])
+    res = runner(["osc", "results", "--show-excluded", project])
     return res.stdout.strip() if res.returncode == 0 else res.stderr.strip()
+
+
+def check_all_results_excluded_or_disabled(
+    project: str, runner: CommandRunner = default_runner
+) -> bool:
+    """Check if all build results in the project are excluded or disabled."""
+    res = runner(["osc", "results", "--xml", project])
+    if res.returncode != 0 or not res.stdout.strip():
+        return False
+
+    try:
+        root = ET.fromstring(res.stdout)
+    except ET.ParseError:
+        return False
+
+    codes: list[str] = []
+    for result_elem in root.findall("result"):
+        statuses = result_elem.findall("status")
+        if statuses:
+            for status_elem in statuses:
+                code = status_elem.attrib.get("code")
+                if code:
+                    codes.append(code.lower())
+        else:
+            code = result_elem.attrib.get("code") or result_elem.attrib.get("state")
+            if code:
+                codes.append(code.lower())
+
+    if not codes:
+        return False
+
+    return all(c in {"excluded", "disabled"} for c in codes)
 
 
 def classify_health(report: DiagnosticReport, context: ProjectContext) -> None:
@@ -343,7 +377,8 @@ def classify_health(report: DiagnosticReport, context: ProjectContext) -> None:
 
     has_repos = len(report.repositories) > 0
     has_package = context.workflow.source_package in report.packages or bool(report.packages)
-    has_files = len(report.package_files) > 0
+    source_files = [f for f in report.package_files if f != "_branch_request"]
+    has_files = len(source_files) > 0
 
     if not has_repos:
         report.status = HealthStatus.BROKEN_EMPTY_PROJECT
@@ -351,9 +386,21 @@ def classify_health(report: DiagnosticReport, context: ProjectContext) -> None:
             "Project has no repositories configured. Run with --recreate to purge and cycle PR."
         )
     elif not has_package or not has_files:
-        report.status = HealthStatus.BROKEN_UNBRANCHED_PACKAGE
+        if report.all_results_excluded_or_disabled:
+            report.status = HealthStatus.BROKEN_EXCLUDED_OR_DISABLED
+            report.suggested_action = (
+                "All results have state excluded/disabled (package sources missing or unbranched). "
+                "Run with --repair-branch to force-branch package or --recreate to purge and cycle PR."
+            )
+        else:
+            report.status = HealthStatus.BROKEN_UNBRANCHED_PACKAGE
+            report.suggested_action = (
+                "Package sources missing or unbranched. Run with --repair-branch to force-branch package."
+            )
+    elif report.all_results_excluded_or_disabled:
+        report.status = HealthStatus.BROKEN_EXCLUDED_OR_DISABLED
         report.suggested_action = (
-            "Package sources missing or unbranched. Run with --repair-branch to force-branch package."
+            "All results have state excluded/disabled. Run with --recreate to purge and cycle PR."
         )
     else:
         report.status = HealthStatus.HEALTHY
@@ -384,6 +431,9 @@ def diagnose(
         else []
     )
     results = get_build_results(context.obs_project, runner=runner)
+    all_excluded = check_all_results_excluded_or_disabled(
+        context.obs_project, runner=runner
+    )
 
     report = DiagnosticReport(
         project_exists=True,
@@ -391,6 +441,7 @@ def diagnose(
         packages=packages,
         package_files=files,
         build_results=results,
+        all_results_excluded_or_disabled=all_excluded,
     )
     classify_health(report, context)
     return report
@@ -417,8 +468,14 @@ def format_report(report: DiagnosticReport, context: ProjectContext) -> str:
         )
         lines.append(f"{'Repositories:':<22} {repos_str}")
 
+        source_files = [f for f in report.package_files if f != "_branch_request"]
+        file_desc = (
+            f"{len(report.package_files)} files in primary, no source files"
+            if report.package_files and not source_files
+            else f"{len(report.package_files)} files in primary"
+        )
         pkgs_summary = (
-            f"{', '.join(report.packages)} ({len(report.package_files)} files in primary)"
+            f"{', '.join(report.packages)} ({file_desc})"
             if report.packages
             else "None"
         )
