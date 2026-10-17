@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# Set how many videos to transcode at the same time
+MAX_JOBS=3 
+
+# Check if there are matching files to avoid literal asterisk when no files match
+shopt -s nullglob
+
+for f in *.{mkv,webm,avi,mp4}; do
+    # Skip if it's already a processed file to avoid infinite loops
+    if [[ "$f" == *"_superkia"* ]]; then continue; fi
+
+    filename=$(basename "$f")
+    echo "Starting: $filename"
+    
+    ffmpeg -y -i "$f" \
+        -map 0:v:0 -map 0:a:0 \
+        -c:v libx264 -preset fast -crf 24 -profile:v main -level 4.0 \
+        -vf "scale=-2:'min(1080,ih)'" -pix_fmt yuv420p \
+        -c:a aac -ac 2 -b:a 192k \
+        -sn -map_metadata -1 \
+        -movflags +faststart \
+        "./${filename%.*}_superkia.mp4" < /dev/null &
+    
+    # Wait if we have reached the maximum number of parallel background jobs
+    while [ $(jobs -p | wc -l) -ge $MAX_JOBS ]; do sleep 1; done
+done
+
+# Wait for all remaining background jobs to finish
+wait
+echo "All done!"
