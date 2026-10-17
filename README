@@ -1,1 +1,29 @@
 Just some various scripts.
+
+## obs-pr-repair
+
+Project-agnostic OBS PR diagnostics and recovery tool for GitHub repositories
+utilizing `.obs/workflows.yml` (e.g. openQA, os-autoinst, os-autoinst-scripts).
+
+### Usage
+
+```bash
+# Check current PR project from within git repository checkout:
+obs-pr-repair
+
+# Check specific PR in openQA:
+obs-pr-repair --repo os-autoinst/openQA --pr 7968
+
+# Recreate broken project (delete OBS project and cycle PR):
+obs-pr-repair --recreate --pr 7968
+
+# Non-interactive recreate:
+obs-pr-repair --recreate --pr 7968 --yes
+
+# Force-repair unbranched package:
+obs-pr-repair --repair-branch --pr 7968
+
+# Trigger rebuild of healthy project:
+obs-pr-repair --rebuild --pr 7968
+```
+
