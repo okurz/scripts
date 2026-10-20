@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -40,6 +41,15 @@ class HealthStatus(str, Enum):
 
 
 @dataclass(frozen=True)
+class RepositoryConfig:
+    """Repository definition from configure_repositories in .obs/workflows.yml."""
+
+    name: str
+    paths: list[tuple[str, str]] = field(default_factory=list)
+    architectures: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class WorkflowConfig:
     """Configuration parsed from .obs/workflows.yml."""
 
@@ -47,6 +57,7 @@ class WorkflowConfig:
     source_project: str
     source_package: str
     target_repositories: list[str] = field(default_factory=list)
+    repositories: list[RepositoryConfig] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -87,6 +98,29 @@ def default_runner(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
+def parse_repository_definitions(configured_repos: list[Any]) -> list[RepositoryConfig]:
+    """Extract repository name, path and architecture definitions from workflow step."""
+    repositories: list[RepositoryConfig] = []
+    for repo in configured_repos:
+        if not isinstance(repo, dict) or "name" not in repo:
+            continue
+        paths = [
+            (path["target_project"], path["target_repository"])
+            for path in repo.get("paths", [])
+            if isinstance(path, dict)
+            and "target_project" in path
+            and "target_repository" in path
+        ]
+        repositories.append(
+            RepositoryConfig(
+                name=str(repo["name"]),
+                paths=paths,
+                architectures=[str(arch) for arch in repo.get("architectures", [])],
+            )
+        )
+    return repositories
+
+
 def parse_workflow_content(content: str) -> WorkflowConfig:
     """Parse workflow configuration content from yaml string."""
     data = yaml.safe_load(content) or {}
@@ -122,6 +156,7 @@ def parse_workflow_content(content: str) -> WorkflowConfig:
         source_project=source_project,
         source_package=source_package,
         target_repositories=target_repositories,
+        repositories=parse_repository_definitions(configured_repos),
     )
 
 
@@ -237,6 +272,7 @@ def resolve_context(
         source_project=args.source_project or base_workflow.source_project,
         source_package=args.source_package or base_workflow.source_package,
         target_repositories=base_workflow.target_repositories,
+        repositories=base_workflow.repositories,
     )
 
     if not workflow.target_project:
@@ -296,6 +332,88 @@ def check_project_meta(
         return True, repos
     except ET.ParseError:
         return True, []
+
+
+def fetch_project_meta(
+    project: str, runner: CommandRunner = default_runner
+) -> ET.Element | None:
+    """Fetch project metadata as XML element, None if project missing or unparseable."""
+    res = runner(["osc", "meta", "prj", project])
+    if res.returncode != 0:
+        return None
+    try:
+        return ET.fromstring(res.stdout)
+    except ET.ParseError:
+        return None
+
+
+def build_repository_element(repo: RepositoryConfig) -> ET.Element:
+    """Build OBS project meta repository element from workflow definition."""
+    element = ET.Element("repository", name=repo.name)
+    for project, repository in repo.paths:
+        ET.SubElement(element, "path", project=project, repository=repository)
+    for architecture in repo.architectures:
+        ET.SubElement(element, "arch").text = architecture
+    return element
+
+
+def configure_repositories(
+    context: ProjectContext, runner: CommandRunner = default_runner
+) -> bool:
+    """Apply missing build targets from workflow to the OBS PR project."""
+    if not context.workflow.repositories:
+        msg = "No repositories defined in workflow. Specify --workflow with configure_repositories."
+        print(f"Error: {msg}", file=sys.stderr)
+        return False
+
+    root = fetch_project_meta(context.obs_project, runner=runner)
+    if root is None:
+        msg = f"Project {context.obs_project} not found on OBS."
+        print(f"Error: {msg}", file=sys.stderr)
+        return False
+
+    existing = {
+        elem.attrib["name"]
+        for elem in root.findall("repository")
+        if "name" in elem.attrib
+    }
+    missing = [repo for repo in context.workflow.repositories if repo.name not in existing]
+    if not missing:
+        print(f"All repositories configured in {context.obs_project}.")
+        return True
+
+    print(
+        f"Adding repositories {', '.join(repo.name for repo in missing)} "
+        f"to {context.obs_project}..."
+    )
+    for repo in missing:
+        root.append(build_repository_element(repo))
+
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as tmp:
+        tmp.write(ET.tostring(root, encoding="unicode"))
+        tmp_path = Path(tmp.name)
+
+    try:
+        api_res = runner([
+            "osc",
+            "api",
+            "-X",
+            "PUT",
+            "-T",
+            str(tmp_path),
+            f"/source/{context.obs_project}/_meta",
+        ])
+        if api_res.returncode != 0:
+            print(
+                f"Error updating project meta: {api_res.stderr.strip()}",
+                file=sys.stderr,
+            )
+            return False
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    print("Build targets configured.")
+    return True
 
 
 def list_packages(
@@ -383,7 +501,8 @@ def classify_health(report: DiagnosticReport, context: ProjectContext) -> None:
     if not has_repos:
         report.status = HealthStatus.BROKEN_EMPTY_PROJECT
         report.suggested_action = (
-            "Project has no repositories configured. Run with --recreate to purge and cycle PR."
+            "Project has no build targets configured. Run with --configure-repos to apply the "
+            "workflow repositories, or --recreate to purge and cycle PR."
         )
     elif not has_package or not has_files:
         if report.all_results_excluded_or_disabled:
@@ -492,6 +611,40 @@ def format_report(report: DiagnosticReport, context: ProjectContext) -> str:
     return "\n".join(lines)
 
 
+def repair_after_cycle(
+    context: ProjectContext,
+    runner: CommandRunner = default_runner,
+    sleep: Callable[[float], None] = time.sleep,
+    timeout: float = 120,
+    interval: float = 10,
+) -> bool:
+    """Re-apply the workflow steps the OBS SCM skipped after cycling the PR."""
+    report = diagnose(context, runner=runner)
+    elapsed = 0.0
+    while report.status == HealthStatus.NOT_FOUND and elapsed < timeout:
+        sleep(interval)
+        elapsed += interval
+        report = diagnose(context, runner=runner)
+
+    if report.status == HealthStatus.NOT_FOUND:
+        print(
+            f"Project {context.obs_project} was not recreated by the OBS workflow.",
+            file=sys.stderr,
+        )
+        return False
+
+    has_source_files = any(f != "_branch_request" for f in report.package_files)
+
+    if not report.repositories and not configure_repositories(context, runner=runner):
+        return False
+    if not has_source_files and not repair_branch(context, runner=runner):
+        return False
+
+    final_report = diagnose(context, runner=runner)
+    print(format_report(final_report, context))
+    return final_report.status == HealthStatus.HEALTHY
+
+
 def recreate_project(
     context: ProjectContext,
     auto_confirm: bool = False,
@@ -533,8 +686,8 @@ def recreate_project(
         print(f"Error reopening PR: {reopen_res.stderr.strip()}", file=sys.stderr)
         return False
 
-    print("Project recreated and PR successfully cycled.")
-    return True
+    print("PR cycled, verifying OBS project layout...")
+    return repair_after_cycle(context, runner=runner)
 
 
 def fetch_pr_head_commit(
@@ -614,7 +767,7 @@ def rebuild_project(
 ) -> bool:
     """Trigger rebuild of packages in OBS PR project."""
     print(f"Triggering rebuild for project {context.obs_project}...")
-    res = runner(["osc", "rebuild", context.obs_project])
+    res = runner(["osc", "rebuild", "--all", context.obs_project])
     if res.returncode != 0:
         print(f"Error triggering rebuild: {res.stderr.strip()}", file=sys.stderr)
         return False
@@ -640,6 +793,9 @@ def create_parser() -> argparse.ArgumentParser:
   # Non-interactive recreate:
   obs-pr-repair --recreate --pr 7968 --yes
 
+  # Add missing build targets to project with no repositories:
+  obs-pr-repair --configure-repos --pr 7968
+
   # Force-repair unbranched package:
   obs-pr-repair --repair-branch --pr 7968
 
@@ -657,7 +813,12 @@ def create_parser() -> argparse.ArgumentParser:
     action_group.add_argument(
         "--recreate",
         action="store_true",
-        help="Delete broken OBS project and close/reopen PR",
+        help="Delete broken OBS project, cycle PR, and verify project layout",
+    )
+    action_group.add_argument(
+        "--configure-repos",
+        action="store_true",
+        help="Add missing build targets from the workflow to the OBS PR project",
     )
     action_group.add_argument(
         "--repair-branch",
@@ -730,16 +891,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    actions_specified = [args.recreate, args.repair_branch, args.rebuild]
+    actions_specified = [
+        args.recreate,
+        args.configure_repos,
+        args.repair_branch,
+        args.rebuild,
+    ]
     if sum(bool(a) for a in actions_specified) > 1:
         print(
-            "Error: Only one of --recreate, --repair-branch, or --rebuild may be specified.",
+            "Error: Only one of --recreate, --configure-repos, --repair-branch, "
+            "or --rebuild may be specified.",
             file=sys.stderr,
         )
         return 1
 
     if args.recreate:
         success = recreate_project(context, auto_confirm=args.yes)
+        return 0 if success else 1
+
+    if args.configure_repos:
+        success = configure_repositories(context)
         return 0 if success else 1
 
     if args.repair_branch:

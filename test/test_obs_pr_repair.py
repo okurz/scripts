@@ -3,7 +3,7 @@ import importlib.util
 import json
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -29,6 +29,11 @@ pr:
         project: devel:openQA:GitHub
         repositories:
           - name: openSUSE_Tumbleweed
+            paths:
+              - target_project: openSUSE:Factory
+                target_repository: snapshot
+              - target_project: devel:openQA
+                target_repository: openSUSE_Tumbleweed
             architectures: [ x86_64 ]
           - name: SLE_15_SP7_Backports
             architectures: [ x86_64 ]
@@ -61,6 +66,58 @@ def make_completed_process(
         stdout=stdout,
         stderr=stderr,
     )
+
+
+EMPTY_PRJ_META = '<project name="p"><url>https://github.com/os-autoinst/openQA/pull/7985</url></project>'
+
+HEALTHY_RESULTS_XML = '<resultlist><result project="p" repository="TW" arch="x86_64"><status package="openQA" code="succeeded"/></result></resultlist>'
+
+
+def openqa_context(pr_number: int = 7985) -> sut.ProjectContext:
+    return sut.ProjectContext(
+        owner="os-autoinst",
+        repo="openQA",
+        pr_number=pr_number,
+        workflow=sut.parse_workflow_content(SAMPLE_OPENQA_WORKFLOW),
+        obs_project=f"devel:openQA:GitHub:os-autoinst:openQA:PR-{pr_number}",
+    )
+
+
+def make_state_runner(
+    state: dict, calls: list[list[str]]
+) -> Callable[[Sequence[str]], subprocess.CompletedProcess[str]]:
+    def fake_runner(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        calls.append(list(cmd))
+        if cmd[1:3] == ["meta", "prj"]:
+            if state.get("project_missing"):
+                return make_completed_process(
+                    returncode=1,
+                    stderr="Server returned an error: HTTP Error 404: Not Found",
+                )
+            return make_completed_process(stdout=state["meta"])
+        if cmd[1] == "ls" and len(cmd) == 3:
+            return make_completed_process(stdout="openQA\n")
+        if cmd[1] == "ls" and len(cmd) == 4:
+            return make_completed_process(stdout=state["files"])
+        if cmd[1] == "branch":
+            state["files"] = "_service\nopenQA.spec\n"
+            return make_completed_process(returncode=state.get("branch_code", 0))
+        if cmd[1] == "api" and cmd[-1].endswith("_meta"):
+            state["meta"] = Path(cmd[5]).read_text(encoding="utf-8")
+            return make_completed_process(stdout="OK")
+        if cmd[0] == "gh" and cmd[1:3] == ["pr", "view"]:
+            payload = {
+                "headRefOid": "abc12345def",
+                "headRepository": {"nameWithOwner": "okurz/openQA"},
+            }
+            return make_completed_process(stdout=json.dumps(payload))
+        if cmd[1] == "results" and "--xml" in cmd:
+            return make_completed_process(stdout=state["results_xml"])
+        if cmd[1] == "results":
+            return make_completed_process(stdout="openQA  x  TW x86_64\n")
+        return make_completed_process(returncode=0)
+
+    return fake_runner
 
 
 @pytest.mark.parametrize(
@@ -112,6 +169,57 @@ def test_parse_workflow_content(
     assert config.source_project == expected_src_prj, desc
     assert config.source_package == expected_src_pkg, desc
     assert config.target_repositories == expected_repos, desc
+
+
+def test_parse_workflow_content_repository_details() -> None:
+    config = sut.parse_workflow_content(SAMPLE_OPENQA_WORKFLOW)
+    assert [repo.name for repo in config.repositories] == [
+        "openSUSE_Tumbleweed",
+        "SLE_15_SP7_Backports",
+        "16.0",
+    ]
+    assert config.repositories[0].paths == [
+        ("openSUSE:Factory", "snapshot"),
+        ("devel:openQA", "openSUSE_Tumbleweed"),
+    ]
+    assert config.repositories[0].architectures == ["x86_64"]
+    assert config.repositories[1].paths == []
+
+
+@pytest.mark.parametrize(
+    ("entries", "expected_names", "expected_paths"),
+    [
+        (
+            [
+                {
+                    "name": "TW",
+                    "paths": [{"target_project": "a", "target_repository": "b"}],
+                }
+            ],
+            ["TW"],
+            [("a", "b")],
+        ),
+        ([{"name": 17}], ["17"], []),
+        (
+            [
+                "string",
+                {"no_name": 1},
+                {"name": "TW", "paths": [{"target_project": "a"}]},
+            ],
+            ["TW"],
+            [],
+        ),
+        ([], [], []),
+    ],
+)
+def test_parse_repository_definitions_skips_invalid_entries(
+    entries: list[object],
+    expected_names: list[str],
+    expected_paths: list[tuple[str, str]],
+) -> None:
+    repos = sut.parse_repository_definitions(entries)
+    assert [repo.name for repo in repos] == expected_names
+    assert [path for repo in repos for path in repo.paths] == expected_paths
 
 
 @pytest.mark.parametrize(
@@ -341,7 +449,7 @@ def test_check_project_meta_not_found() -> None:
             "project with zero repositories classified as BROKEN_EMPTY_PROJECT",
             sut.DiagnosticReport(project_exists=True, repositories=[], packages=[]),
             sut.HealthStatus.BROKEN_EMPTY_PROJECT,
-            "--recreate",
+            "--configure-repos",
         ),
         (
             "project with repositories but no package files classified as BROKEN_UNBRANCHED_PACKAGE",
@@ -590,6 +698,153 @@ def test_diagnose_flow_excluded_or_disabled() -> None:
     assert "x  TW x86_64" in formatted
 
 
+FULL_PRJ_META = (
+    '<project name="p">'
+    '<repository name="openSUSE_Tumbleweed"/>'
+    '<repository name="SLE_15_SP7_Backports"/>'
+    '<repository name="16.0"/>'
+    "</project>"
+)
+
+
+def test_configure_repositories_adds_missing_build_targets() -> None:
+    ctx = openqa_context()
+    state = {
+        "meta": EMPTY_PRJ_META,
+        "files": "_service\n",
+        "results_xml": HEALTHY_RESULTS_XML,
+    }
+    calls: list[list[str]] = []
+    runner = make_state_runner(state, calls)
+
+    assert sut.configure_repositories(ctx, runner=runner) is True
+
+    api_calls = [cmd for cmd in calls if cmd[1] == "api"]
+    assert len(api_calls) == 1
+    assert api_calls[0][:4] == ["osc", "api", "-X", "PUT"]
+    assert (
+        api_calls[0][-1]
+        == "/source/devel:openQA:GitHub:os-autoinst:openQA:PR-7985/_meta"
+    )
+    assert '<repository name="openSUSE_Tumbleweed">' in state["meta"]
+    assert '<path project="openSUSE:Factory"' in state["meta"]
+    assert 'repository="snapshot"' in state["meta"]
+    assert '<repository name="16.0">' in state["meta"]
+    assert state["meta"].count("<arch>x86_64</arch>") == 3
+
+
+def test_configure_repositories_skips_existing_repositories() -> None:
+    ctx = openqa_context()
+    calls: list[list[str]] = []
+
+    def fake_runner(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        calls.append(list(cmd))
+        return make_completed_process(stdout=FULL_PRJ_META)
+
+    assert sut.configure_repositories(ctx, runner=fake_runner) is True
+    assert all(cmd[1] != "api" for cmd in calls)
+
+
+def test_configure_repositories_missing_project() -> None:
+    ctx = openqa_context()
+    runner = MagicMock(
+        return_value=make_completed_process(
+            returncode=1, stderr="HTTP Error 404: Not Found"
+        )
+    )
+    assert sut.configure_repositories(ctx, runner=runner) is False
+
+
+def test_configure_repositories_without_workflow_repositories() -> None:
+    ctx = sut.ProjectContext(
+        owner="o",
+        repo="r",
+        pr_number=1,
+        workflow=sut.WorkflowConfig("tgt", "src", "pkg"),
+        obs_project="proj",
+    )
+    runner = MagicMock()
+    assert sut.configure_repositories(ctx, runner=runner) is False
+    runner.assert_not_called()
+
+
+def test_configure_repositories_put_failure() -> None:
+    ctx = openqa_context()
+
+    def fake_runner(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        if cmd[1:3] == ["meta", "prj"]:
+            return make_completed_process(stdout=EMPTY_PRJ_META)
+        return make_completed_process(returncode=1, stderr="api fail")
+
+    assert sut.configure_repositories(ctx, runner=fake_runner) is False
+
+
+def test_repair_after_cycle_project_not_recreated() -> None:
+    ctx = openqa_context()
+    sleeps: list[float] = []
+
+    def fake_runner(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        return make_completed_process(returncode=1, stderr="HTTP Error 404: Not Found")
+
+    ok = sut.repair_after_cycle(
+        ctx,
+        runner=fake_runner,
+        sleep=lambda s: sleeps.append(s),
+        timeout=20,
+        interval=10,
+    )
+    assert ok is False
+    assert sleeps == [10, 10]
+
+
+def test_repair_after_cycle_configures_missing_build_targets() -> None:
+    ctx = openqa_context()
+    state = {
+        "meta": EMPTY_PRJ_META,
+        "files": "_service\n",
+        "results_xml": HEALTHY_RESULTS_XML,
+    }
+    calls: list[list[str]] = []
+    ok = sut.repair_after_cycle(
+        ctx, runner=make_state_runner(state, calls), sleep=lambda s: None
+    )
+    assert ok is True
+    assert '<repository name="16.0">' in state["meta"]
+    assert not any(cmd[1] == "branch" for cmd in calls)
+
+
+def test_repair_after_cycle_rebranches_empty_package() -> None:
+    ctx = openqa_context()
+    state = {"meta": FULL_PRJ_META, "files": "", "results_xml": HEALTHY_RESULTS_XML}
+    calls: list[list[str]] = []
+    ok = sut.repair_after_cycle(
+        ctx, runner=make_state_runner(state, calls), sleep=lambda s: None
+    )
+    assert ok is True
+    branches = [cmd for cmd in calls if cmd[1] == "branch"]
+    assert branches == [
+        ["osc", "branch", "-f", "devel:openQA", "openQA", ctx.obs_project, "openQA"]
+    ]
+    assert any(cmd[-1].endswith("/openQA/_branch_request") for cmd in calls)
+
+
+def test_repair_after_cycle_branch_failure() -> None:
+    ctx = openqa_context()
+    state = {
+        "meta": FULL_PRJ_META,
+        "files": "",
+        "results_xml": HEALTHY_RESULTS_XML,
+        "branch_code": 1,
+    }
+    calls: list[list[str]] = []
+    assert (
+        sut.repair_after_cycle(
+            ctx, runner=make_state_runner(state, calls), sleep=lambda s: None
+        )
+        is False
+    )
+
+
 def test_recreate_project_abort_on_prompt() -> None:
     ctx = sut.ProjectContext(
         owner="os-autoinst",
@@ -619,8 +874,10 @@ def test_recreate_project_auto_confirm() -> None:
         calls.append(list(cmd))
         return make_completed_process(returncode=0)
 
-    success = sut.recreate_project(ctx, auto_confirm=True, runner=fake_runner)
+    with patch.object(sut, "repair_after_cycle", return_value=True) as mock_repair:
+        success = sut.recreate_project(ctx, auto_confirm=True, runner=fake_runner)
     assert success is True
+    assert mock_repair.called
     assert calls[0][:3] == ["osc", "rdelete", "-r"]
     assert calls[0][-1] == ctx.obs_project
     assert calls[1] == ["gh", "pr", "close", "123", "--repo", "os-autoinst/openQA"]
@@ -681,12 +938,13 @@ def test_rebuild_project() -> None:
     runner = MagicMock(return_value=make_completed_process(returncode=0))
     success = sut.rebuild_project(ctx, runner=runner)
     assert success is True
-    runner.assert_called_once_with(["osc", "rebuild", "target:project"])
+    runner.assert_called_once_with(["osc", "rebuild", "--all", "target:project"])
 
 
 def test_main_multiple_actions_error() -> None:
     exit_code = sut.main(["--recreate", "--rebuild", "--skip-auth-check"])
     assert exit_code == 1
+    assert sut.main(["--configure-repos", "--rebuild", "--skip-auth-check"]) == 1
 
 
 def test_find_and_parse_workflow_file(tmp_path: Path) -> None:
@@ -863,6 +1121,10 @@ def test_main_dispatch_flows(tmp_path: Path) -> None:
     with patch.object(sut, "repair_branch", return_value=True) as mock_rep:
         assert sut.main([*base_args, "--repair-branch"]) == 0
         assert mock_rep.called
+
+    with patch.object(sut, "configure_repositories", return_value=True) as mock_cfg:
+        assert sut.main([*base_args, "--configure-repos"]) == 0
+        assert mock_cfg.called
 
     with patch.object(sut, "rebuild_project", return_value=True) as mock_reb:
         assert sut.main([*base_args, "--rebuild"]) == 0
