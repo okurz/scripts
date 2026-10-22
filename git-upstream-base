@@ -1,0 +1,18 @@
+#!/bin/sh -e
+# Print the upstream base ref: origin's HEAD symref, then origin/master, then origin/main.
+base=$(git symbolic-ref --short -q refs/remotes/origin/HEAD) || true
+if test -z "$base"; then
+    git remote set-head origin --auto >/dev/null 2>&1 || true
+    base=$(git symbolic-ref --short -q refs/remotes/origin/HEAD) || true
+fi
+if test -z "$base"; then
+    for ref in master main; do
+        git rev-parse --quiet --verify "refs/remotes/origin/$ref" >/dev/null &&
+            base="origin/$ref" && break
+    done
+fi
+test -n "$base" || {
+    echo "No origin/HEAD, origin/master or origin/main ref; pass the target explicitly" >&2
+    exit 1
+}
+echo "$base"
