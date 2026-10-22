@@ -1,7 +1,15 @@
-#!/bin/sh
+#!/bin/sh -e
 
-# Check if a rebase is already in progress
-if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+git_dir=$(git rev-parse --git-dir)
+in_rebase() { [ -d "$git_dir/rebase-merge" ] || [ -d "$git_dir/rebase-apply" ]; }
+
+start_branch=$(git symbolic-ref --short -q HEAD) || true
+
+# A resumed rebase has a detached HEAD, so take the branch from the rebase state
+test -z "$start_branch" && test -f "$git_dir/rebase-merge/head-name" &&
+    start_branch=$(sed 's|^refs/heads/||' "$git_dir/rebase-merge/head-name")
+
+if in_rebase; then
     echo "Rebase in progress detected. Continuing rebase..."
     if ! GIT_EDITOR=true git rebase --continue; then
         echo "Failed to continue rebase. Please resolve conflicts and run this script again."
@@ -9,24 +17,47 @@ if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
     fi
 fi
 
-# maybe the whole logic about default_rebase_target can be replaced by '@',
-# see https://stackoverflow.com/a/66153331/22022448
-#if git branch -a | grep -q 'gerrit/\(master\|main\)'; then
-#    default_rebase_target=gerrit
-#else
-#    default_rebase_target=origin
-#fi
-#git symbolic-ref refs/remotes/$default_rebase_target/HEAD >/dev/null 2>&1 || git remote set-head origin --auto
-#rebase_target="${rebase_target:-${1:-"$(git symbolic-ref refs/remotes/$default_rebase_target/HEAD | sed "s@^refs/remotes/default_rebase_target/@@")"}}"
-rebase_target=${rebase_target:-$(git branch -a | grep 'origin/\(master\|main\)' | tail -n1)}
+# Checked-out branch switches require a clean tree
+if test -n "$(git status --porcelain)"; then
+    echo "Working tree dirty; stash (git stash) and run again."
+    exit 1
+fi
 
-for i in $(git branch-raw | grep -v no_rebase) ; do
+# Upstream target: origin's HEAD symref, falling back to master then main
+rebase_target=${1:-${rebase_target:-}}
+if test -z "$rebase_target"; then
+    rebase_target=$(git symbolic-ref --short -q refs/remotes/origin/HEAD) || true
+    if test -z "$rebase_target"; then
+        git remote set-head origin --auto >/dev/null 2>&1 || true
+        rebase_target=$(git symbolic-ref --short -q refs/remotes/origin/HEAD) || true
+    fi
+    if test -z "$rebase_target"; then
+        for ref in master main; do
+            git rev-parse --quiet --verify "refs/remotes/origin/$ref" >/dev/null &&
+                rebase_target="origin/$ref" && break
+        done
+    fi
+fi
+test -n "$rebase_target" || {
+    echo "No origin/HEAD, origin/master or origin/main ref; pass the target as \$1 or rebase_target=<ref>"
+    exit 1
+}
+
+for i in $(git branch-raw); do
     # Skip branches already up to date with rebase target
-    #shellcheck disable=SC2086
-    if git merge-base --is-ancestor $rebase_target "$i" 2>/dev/null; then
+    if git merge-base --is-ancestor "$rebase_target" "$i" 2>/dev/null; then
         echo "Skipping $i (already up to date)"
         continue
     fi
-    #shellcheck disable=SC2086 disable=SC2015
-    git checkout "$i" && git rebase --rerere-autoupdate $rebase_target || break
+    #shellcheck disable=SC2015
+    git checkout "$i" && git rebase --rerere-autoupdate "$rebase_target" || break
 done
+
+# A conflict leaves the rebase in progress on the conflicted branch
+if in_rebase; then
+    echo "Conflict on $i; resolve, git add, then re-run this script."
+    exit 1
+fi
+if test -n "$start_branch"; then
+    test "$(git symbolic-ref --short -q HEAD)" = "$start_branch" || git checkout "$start_branch"
+fi
