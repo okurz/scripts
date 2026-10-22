@@ -1,0 +1,77 @@
+#!/bin/sh -e
+# Review commits added since the upstream base, oldest first, one commit per screen.
+#
+# git review            step through commits one by one (Enter=next, p=prev, N=jump, a=all, q=quit)
+# git review -l         numbered summary of the commits, no diff
+# git review -s         numbered summary with per-commit diffstat
+# git review -p         whole stream in one pager (git log --reverse -p)
+# git review -n 3       show commit #3 only
+# git review <range>    any git range, e.g. origin/main..feature, HEAD~3.., v1.2..
+
+mode=step
+range=
+target=
+while test $# -gt 0; do
+    case $1 in
+        -h | --help) sed -n '4,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -l) mode=list; shift ;;
+        -s) mode=stat; shift ;;
+        -p) mode=stream; shift ;;
+        -n) mode=show; target=$2; shift 2 ;;
+        *) range=$1; shift ;;
+    esac
+done
+
+test -n "$range" || range="$(git-upstream-base)..HEAD"
+commits=$(git rev-list --reverse "$range")
+test -n "$commits" || { echo "Nothing to review in $range"; exit 0; }
+total=$(printf '%s\n' "$commits" | wc -l | tr -d ' ')
+
+pager=${REVIEW_PAGER:-}
+if test -z "$pager"; then
+    # shellcheck disable=SC2209 # the value is a pager command line, not command output
+    if test -t 1; then pager='less -F -X -R'; else pager=cat; fi
+fi
+
+nth() { printf '%s\n' "$commits" | sed -n "$1p"; }
+
+if test "$mode" = stat; then flags='--stat'; else flags=''; fi
+
+case $mode in
+    list | stat)
+        i=1
+        for sha in $commits; do
+            printf '%2d. ' "$i"
+            git show --no-patch --format='%h %s' $flags "$sha"
+            i=$((i + 1))
+        done
+        exit 0
+        ;;
+    stream) git log --reverse -p --color=always "$range" | $pager; exit 0 ;;
+    show)
+        if test -z "$target"; then echo "-n needs a commit number"; exit 1; fi
+        if test "$target" -lt 1 || test "$target" -gt "$total"; then
+            echo "commit #$target is outside 1..$total"; exit 1
+        fi
+        git show --format=fuller --stat --color=always "$(nth "$target")" | $pager
+        exit 0
+        ;;
+esac
+
+i=1
+while :; do
+    git show --format=fuller --stat --color=always "$(nth "$i")" | $pager
+    if test "$i" -ge "$total"; then break; fi
+    printf 'commit %d/%d  Enter=next p=prev N=jump a=all q=quit: ' "$i" "$total"
+    ans=
+    if test -t 0; then IFS= read -r ans </dev/tty || break; else break; fi
+    case $ans in
+        q | Q) break ;;
+        a | A) git log --reverse -p --color=always "$range" | $pager; break ;;
+        p | P) if test "$i" -gt 1; then i=$((i - 1)); fi ;;
+        '') i=$((i + 1)) ;;
+        *[0-9])
+            if test "$ans" -ge 1 && test "$ans" -le "$total"; then i=$ans; fi
+            ;;
+    esac
+done
