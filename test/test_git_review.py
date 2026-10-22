@@ -3,7 +3,11 @@ tests for git-upstream-base, git review and git review-branch
 """
 
 import os
+import re
+import shutil
 import subprocess
+
+import pytest
 
 rootpath = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -16,13 +20,37 @@ COMMIT_CONFIG = [
     "commit.gpgsign=false",
 ]
 
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def env():
+    result = dict(os.environ)
+    result["PATH"] = rootpath + os.pathsep + result["PATH"]
+    result["REVIEW_PAGER"] = "cat"
+    return result
+
 
 def run_tool(work, command):
-    env = dict(os.environ)
-    env["PATH"] = rootpath + os.pathsep + env["PATH"]
-    env["REVIEW_PAGER"] = "cat"
     return subprocess.run(
-        command, cwd=str(work), env=env, capture_output=True, text=True, check=False
+        command,
+        cwd=str(work),
+        env=env(),
+        capture_output=True,
+        text=True,
+        input="",
+        check=False,
+    )
+
+
+def run_interactive(work, keys):
+    return subprocess.run(
+        ["script", "-qc", "git review", "/dev/null"],
+        cwd=str(work),
+        env=env(),
+        input=keys,
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
 
@@ -52,6 +80,24 @@ def make_repo(tmp_path, default_branch, work_branch, commit_count):
         git(work, "add", "-A")
         git(work, "commit", "-qm", f"commit {i}")
     return work
+
+
+def merge_repo(tmp_path):
+    work = make_repo(tmp_path, "master", "feature", 1)
+    git(work, "checkout", "-q", "-b", "side")
+    (work / "side").write_text("side content\n")
+    git(work, "add", "-A")
+    git(work, "commit", "-qm", "side commit")
+    git(work, "checkout", "-q", "feature")
+    (work / "f1").write_text("content1\n")
+    git(work, "add", "-A")
+    git(work, "commit", "-qm", "commit 1")
+    git(work, "merge", "-q", "--no-edit", "side")
+    return work
+
+
+def numbered(result):
+    return [line.split()[0] for line in result.stdout.splitlines() if line.strip()]
 
 
 def test_origin_head_symref_is_preferred(tmp_path):
@@ -90,17 +136,26 @@ def test_review_lists_commits_oldest_first(tmp_path):
     work = make_repo(tmp_path, "master", "feature", 3)
     result = run_tool(work, ["git", "review", "-l"])
     lines = [line for line in result.stdout.splitlines() if line.strip()]
-    assert [line.split()[0] for line in lines] == ["1.", "2.", "3."]
+    assert numbered(result) == ["1.", "2.", "3."]
     assert lines[0].endswith("commit 0")
     assert lines[2].endswith("commit 2")
 
 
-def test_review_shows_only_the_requested_commit(tmp_path):
+def test_step_view_shows_patch_and_position(tmp_path):
+    work = make_repo(tmp_path, "master", "feature", 2)
+    result = run_tool(work, ["git", "review"])
+    assert "=== commit 1/2 ===" in result.stdout
+    assert "content0" in result.stdout
+    assert "content1" not in result.stdout
+
+
+def test_review_shows_patch_for_requested_commit(tmp_path):
     work = make_repo(tmp_path, "master", "feature", 3)
     result = run_tool(work, ["git", "review", "-n", "2"])
-    assert "    commit 1\n" in result.stdout
-    assert "    commit 0\n" not in result.stdout
-    assert "    commit 2\n" not in result.stdout
+    assert "=== commit 2/3 ===" in result.stdout
+    assert "content1" in result.stdout
+    assert "content0" not in result.stdout
+    assert "content2" not in result.stdout
 
 
 def test_review_rejects_number_outside_range(tmp_path):
@@ -116,11 +171,47 @@ def test_review_reports_nothing_to_review_on_clean_branch(tmp_path):
     assert "Nothing to review" in result.stdout
 
 
+def test_rest_continues_from_current_commit(tmp_path):
+    if shutil.which("script") is None:
+        pytest.skip("script(1) needed for a pty")
+    work = make_repo(tmp_path, "master", "feature", 3)
+    result = run_interactive(work, "2\na\n")
+    markers = ANSI.sub("", result.stdout)
+    assert re.findall(r"=== commit (\d+)/(\d+) ===", markers) == [
+        ("1", "3"),
+        ("2", "3"),
+        ("2", "3"),
+        ("3", "3"),
+    ]
+    assert "content2" in markers
+
+
 def test_review_stream_shows_patches_oldest_first(tmp_path):
     work = make_repo(tmp_path, "master", "feature", 2)
     result = run_tool(work, ["git", "review", "-p"])
     assert result.stdout.find("content0") < result.stdout.find("content1")
     assert result.stdout.count("diff --git") == 2
+
+
+def test_stream_stays_plain_text_without_pager(tmp_path):
+    work = make_repo(tmp_path, "master", "feature", 1)
+    result = run_tool(work, ["git", "review", "-p"])
+    assert "\x1b[" not in result.stdout
+
+
+def test_numbering_skips_merge_commits(tmp_path):
+    work = merge_repo(tmp_path)
+    result = run_tool(work, ["git", "review", "-l"])
+    assert numbered(result) == ["1.", "2.", "3."]
+    assert "side commit" in result.stdout
+    assert "Merge" not in result.stdout
+
+
+def test_merges_flag_includes_merge_commits(tmp_path):
+    work = merge_repo(tmp_path)
+    result = run_tool(work, ["git", "review", "--merges", "-l"])
+    assert numbered(result) == ["1.", "2.", "3.", "4."]
+    assert "Merge" in result.stdout
 
 
 def test_review_shows_diffstat_for_stat_mode(tmp_path):
