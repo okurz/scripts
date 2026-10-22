@@ -26,22 +26,11 @@ fi
 # Upstream target: origin's HEAD symref, falling back to master then main
 rebase_target=${1:-${rebase_target:-}}
 if test -z "$rebase_target"; then
-    rebase_target=$(git symbolic-ref --short -q refs/remotes/origin/HEAD) || true
-    if test -z "$rebase_target"; then
-        git remote set-head origin --auto >/dev/null 2>&1 || true
-        rebase_target=$(git symbolic-ref --short -q refs/remotes/origin/HEAD) || true
-    fi
-    if test -z "$rebase_target"; then
-        for ref in master main; do
-            git rev-parse --quiet --verify "refs/remotes/origin/$ref" >/dev/null &&
-                rebase_target="origin/$ref" && break
-        done
-    fi
+    rebase_target=$(git-upstream-base) || {
+        echo "No origin/HEAD, origin/master or origin/main ref; pass the target as \$1 or rebase_target=<ref>"
+        exit 1
+    }
 fi
-test -n "$rebase_target" || {
-    echo "No origin/HEAD, origin/master or origin/main ref; pass the target as \$1 or rebase_target=<ref>"
-    exit 1
-}
 
 for i in $(git branch-raw); do
     # Skip branches already up to date with rebase target
