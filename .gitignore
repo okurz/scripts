@@ -2,3 +2,9 @@ isotovideo
 /test-more-bash/
 test/__pycache__/
 __pycache__/
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+.venv/

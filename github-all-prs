@@ -2,12 +2,13 @@
 import concurrent.futures
 import json
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import typer
 from dateutil.parser import isoparse
 
 app = typer.Typer(help="List GitHub PRs needing review or work in Slack-compatible format.", no_args_is_help=False)
+
 
 def run_gh(args: list[str]) -> str | None:
     """Execute a gh CLI command and return its stdout."""
@@ -17,24 +18,28 @@ def run_gh(args: list[str]) -> str | None:
     except subprocess.CalledProcessError:
         return None
 
+
 def get_me() -> str:
     """Return the current user's GitHub login."""
     return run_gh(["api", "user", "--jq", ".login"]) or "@me"
 
+
 def parse_date(date_str: str) -> datetime:
     """Parse ISO 8601 date string from GitHub."""
     if not date_str:
-        return datetime.fromtimestamp(0, tz=timezone.utc)
+        return datetime.fromtimestamp(0, tz=UTC)
     d = isoparse(date_str)
     if d.tzinfo is None:
-        d = d.replace(tzinfo=timezone.utc)
+        d = d.replace(tzinfo=UTC)
     return d
+
 
 def get_pr_details(url: str) -> dict:
     """Fetch detailed PR status."""
     fields = "url,title,reviewDecision,statusCheckRollup,latestReviews,reviews,comments,commits"
     data_raw = run_gh(["pr", "view", url, "--json", fields])
     return json.loads(data_raw) if data_raw else {}
+
 
 def has_unanswered_changes_requested(pr: dict, me: str) -> bool:
     """Check if PR has changes requested that haven't been answered by comments or commits."""
@@ -43,19 +48,22 @@ def has_unanswered_changes_requested(pr: dict, me: str) -> bool:
     cr_reviews = [r for r in pr.get("latestReviews", []) if r.get("state") == "CHANGES_REQUESTED"]
     if not cr_reviews:
         return False
-    dates = [
-        parse_date(date_str)
-        for r in cr_reviews
-        if (date_str := r.get("submittedAt") or r.get("updatedAt"))
-    ]
+    dates = [parse_date(date_str) for r in cr_reviews if (date_str := r.get("submittedAt") or r.get("updatedAt"))]
     if not dates:
         return True
     latest_cr = max(dates)
-    if any(c.get("author", {}).get("login") == me and parse_date(c.get("createdAt")) > latest_cr for c in pr.get("comments", [])):
+    if any(
+        c.get("author", {}).get("login") == me and parse_date(c.get("createdAt")) > latest_cr
+        for c in pr.get("comments", [])
+    ):
         return False
-    if any(r.get("author", {}).get("login") == me and parse_date(r.get("submittedAt") or r.get("updatedAt")) > latest_cr for r in pr.get("reviews", [])):
+    if any(
+        r.get("author", {}).get("login") == me and parse_date(r.get("submittedAt") or r.get("updatedAt")) > latest_cr
+        for r in pr.get("reviews", [])
+    ):
         return False
     return not any(parse_date(c.get("committedDate")) > latest_cr for c in pr.get("commits", []))
+
 
 def needs_review_filter(pr: dict, me: str) -> str | None:
     """PR is ready for review by others (CI success, no unanswered changes requested)."""
@@ -65,6 +73,7 @@ def needs_review_filter(pr: dict, me: str) -> str | None:
     if not has_unanswered_changes_requested(pr, me):
         return f"* {pr['url']} {pr['title']}"
     return None
+
 
 def needs_work_filter(pr: dict, me: str) -> str | None:
     """PR needs work by the author (CI failure or unanswered changes requested)."""
@@ -84,7 +93,9 @@ def needs_work_filter(pr: dict, me: str) -> str | None:
 def list_needs_review(limit: int, workers: int):
     """Core logic for needs-review."""
     me = get_me()
-    query = f"search prs --author @me --state open --checks success --sort updated --limit {limit} --json url,title,isDraft"
+    query = (
+        f"search prs --author @me --state open --checks success --sort updated --limit {limit} --json url,title,isDraft"
+    )
     raw_prs = run_gh(query.split())
     if not raw_prs:
         return
@@ -94,6 +105,7 @@ def list_needs_review(limit: int, workers: int):
     output = "\n".join(filter(None, [needs_review_filter(d, me) for d in details]))
     if output:
         typer.echo(output)
+
 
 def list_needs_work(limit: int, workers: int):
     """Core logic for needs-work."""
@@ -109,6 +121,7 @@ def list_needs_work(limit: int, workers: int):
     if output:
         typer.echo(output)
 
+
 @app.command()
 def needs_review(
     limit: int = typer.Option(100, help="Maximum number of PRs to search."),
@@ -116,6 +129,7 @@ def needs_review(
 ):
     """Fetch and display open PRs by current user that are ready for review (CI success, no changes requested)."""
     list_needs_review(limit, workers)
+
 
 @app.command()
 def needs_work(
@@ -125,11 +139,13 @@ def needs_work(
     """Fetch and display open PRs by current user that need work (CI failure or unanswered changes requested)."""
     list_needs_work(limit, workers)
 
+
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context):
     """Default to needs-review if no command provided."""
     if ctx.invoked_subcommand is None:
         list_needs_review(100, 10)
+
 
 if __name__ == "__main__":
     app()

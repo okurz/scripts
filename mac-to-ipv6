@@ -2,11 +2,12 @@
 # https://progress.opensuse.org/issues/155824#note-20
 import os
 import sys
+
 if len(sys.argv) < 2:
     mac = input("Enter mac of host: ")
 else:
     mac = sys.argv[1]
-prefix = os.environ['prefix'] if os.environ['prefix'] else ''
+prefix = os.environ["prefix"] if os.environ["prefix"] else ""
 byte_strings = mac.split(":")
 fffe_inserted = byte_strings[:3] + ["ff", "fe"] + byte_strings[3:]
 flipped_bit = hex(int(fffe_inserted[0], 16) ^ 0b00000010)

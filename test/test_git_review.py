@@ -1,6 +1,4 @@
-"""
-tests for git-upstream-base, git review and git review-branch
-"""
+"""tests for git-upstream-base, git review and git review-branch"""
 
 import os
 import re

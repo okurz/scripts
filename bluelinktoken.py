@@ -23,9 +23,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 
 def main():
-    """
-    Determine brand to get the refresh token for
-    """
+    """Determine brand to get the refresh token for"""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--brand",
@@ -46,18 +44,14 @@ def main():
         # Kia specific variables here
         CLIENT_ID = "fdc85c00-0a2f-4c64-bcb4-2cfb1500730a"
         CLIENT_SECRET = "secret"
-        REDIRECT_URL_FINAL = (
-            "https://prd.eu-ccapi.kia.com:8080/api/v1/user/oauth2/redirect"
-        )
+        REDIRECT_URL_FINAL = "https://prd.eu-ccapi.kia.com:8080/api/v1/user/oauth2/redirect"
         SUCCESS_ELEMENT_SELECTOR = "a[class='logout user']"
         LOGIN_URL = f"{BASE_URL}authorize?ui_locales=de&scope=openid%20profile%20email%20phone&response_type=code&client_id=peukiaidm-online-sales&redirect_uri=https://www.kia.com/api/bin/oneid/login&state=aHR0cHM6Ly93d3cua2lhLmNvbTo0NDMvZGUvP21zb2NraWQ9MjM1NDU0ODBmNmUyNjg5NDIwMmU0MDBjZjc2OTY5NWQmX3RtPTE3NTYzMTg3MjY1OTImX3RtPTE3NTYzMjQyMTcxMjY=_default"
     elif args.brand == "hyundai":
         # Hyundai specific variables
         CLIENT_ID = "6d477c38-3ca4-4cf3-9557-2a1929a94654"
         CLIENT_SECRET = "KUy49XxPzLpLuoK0xhBC77W6VXhmtQR9iQhmIFjjoY4IpxsV"
-        REDIRECT_URL_FINAL = (
-            "https://prd.eu-ccapi.hyundai.com:8080/api/v1/user/oauth2/token"
-        )
+        REDIRECT_URL_FINAL = "https://prd.eu-ccapi.hyundai.com:8080/api/v1/user/oauth2/token"
         SUCCESS_ELEMENT_SELECTOR = "button.mail_check"
         LOGIN_URL = f"{BASE_URL}authorize?client_id=peuhyundaiidm-ctb&redirect_uri=https%3A%2F%2Fctbapi.hyundai-europe.com%2Fapi%2Fauth&nonce=&state=NL_&scope=openid+profile+email+phone&response_type=code&connector_client_id=peuhyundaiidm-ctb&connector_scope=&connector_session_key=&country=&captcha=1&ui_locales=en-US"
 
@@ -89,20 +83,12 @@ def main():
     try:
         wait = WebDriverWait(driver, 300)  # 300-second timeout
         if args.brand == "kia":
-            wait.until(
-                EC.presence_of_element_located(
-                    (By.CSS_SELECTOR, SUCCESS_ELEMENT_SELECTOR)
-                )
-            )
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, SUCCESS_ELEMENT_SELECTOR)))
         else:
             wait.until(
                 EC.any_of(
-                    EC.presence_of_element_located(
-                        (By.CSS_SELECTOR, SUCCESS_ELEMENT_SELECTOR)
-                    ),
-                    EC.presence_of_element_located(
-                        (By.CSS_SELECTOR, "button.ctb_button")
-                    ),
+                    EC.presence_of_element_located((By.CSS_SELECTOR, SUCCESS_ELEMENT_SELECTOR)),
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "button.ctb_button")),
                 )
             )
 
@@ -119,14 +105,8 @@ def main():
         while tries_left > 0:
             current_url = driver.current_url
             print(f" - [{11 - tries_left}] Waiting for redirect URLwith code")
-            if (
-                args.brand == "kia"
-                and re.match(
-                    r"^https://.*:8080/api/v1/user/oauth2/redirect", current_url
-                )
-            ) or (
-                args.brand == "hyundai"
-                and re.match(r"^https://.*:8080/api/v1/user/oauth2/token", current_url)
+            if (args.brand == "kia" and re.match(r"^https://.*:8080/api/v1/user/oauth2/redirect", current_url)) or (
+                args.brand == "hyundai" and re.match(r"^https://.*:8080/api/v1/user/oauth2/token", current_url)
             ):
                 redir_found = True
                 break
@@ -134,13 +114,9 @@ def main():
             time.sleep(1)
 
         if not redir_found:
-            print(
-                f"\n❌ Failed to get redirected to correct URL, got {current_url} instead"
-            )
+            print(f"\n❌ Failed to get redirected to correct URL, got {current_url} instead")
 
-        code = re.search(
-            r"code=([0-9a-fA-F-]{36}\.[0-9a-fA-F-]{36}\.[0-9a-fA-F-]{36})", current_url
-        ).group(1)
+        code = re.search(r"code=([0-9a-fA-F-]{36}\.[0-9a-fA-F-]{36}\.[0-9a-fA-F-]{36})", current_url).group(1)
         data = {
             "grant_type": "authorization_code",
             "code": code,
@@ -155,16 +131,12 @@ def main():
             if tokens is not None:
                 refresh_token = tokens["refresh_token"]
                 access_token = tokens["access_token"]
-                print(
-                    f"\n✅ Your tokens are:\n\n- Refresh Token: {refresh_token}\n- Access Token: {access_token}"
-                )
+                print(f"\n✅ Your tokens are:\n\n- Refresh Token: {refresh_token}\n- Access Token: {access_token}")
         else:
             print(f"\n❌ Error getting tokens from der API!\n{response.text}")
 
     except TimeoutException:
-        print(
-            "❌ Timed out after 5 minutes. Login was not completed or the success element was not found."
-        )
+        print("❌ Timed out after 5 minutes. Login was not completed or the success element was not found.")
     except Exception as e:  # noqa: BLE001
         print(f"An unexpected error occurred: {e}")
         time.sleep(3600)

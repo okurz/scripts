@@ -70,9 +70,7 @@ def test_parse_date():
                         "submittedAt": "2026-09-28T08:00:00Z",
                     }
                 ],
-                "comments": [
-                    {"author": {"login": "okurz"}, "createdAt": "2026-10-11T12:00:00Z"}
-                ],
+                "comments": [{"author": {"login": "okurz"}, "createdAt": "2026-10-11T12:00:00Z"}],
                 "commits": [],
                 "reviews": [],
             },
@@ -172,9 +170,7 @@ def test_has_unanswered_changes_requested(desc, pr, me, expected):
                         "submittedAt": "2026-09-28T08:00:00Z",
                     }
                 ],
-                "comments": [
-                    {"author": {"login": "okurz"}, "createdAt": "2026-10-11T12:00:00Z"}
-                ],
+                "comments": [{"author": {"login": "okurz"}, "createdAt": "2026-10-11T12:00:00Z"}],
                 "commits": [],
                 "reviews": [],
                 "statusCheckRollup": [{"conclusion": "SUCCESS"}],
@@ -234,9 +230,7 @@ def test_needs_review_filter(desc, pr, me, expected):
                         "submittedAt": "2026-09-28T08:00:00Z",
                     }
                 ],
-                "comments": [
-                    {"author": {"login": "okurz"}, "createdAt": "2026-10-11T12:00:00Z"}
-                ],
+                "comments": [{"author": {"login": "okurz"}, "createdAt": "2026-10-11T12:00:00Z"}],
                 "commits": [],
                 "reviews": [],
                 "statusCheckRollup": [{"conclusion": "SUCCESS"}],

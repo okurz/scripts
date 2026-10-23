@@ -107,9 +107,7 @@ def parse_repository_definitions(configured_repos: list[Any]) -> list[Repository
         paths = [
             (path["target_project"], path["target_repository"])
             for path in repo.get("paths", [])
-            if isinstance(path, dict)
-            and "target_project" in path
-            and "target_repository" in path
+            if isinstance(path, dict) and "target_project" in path and "target_repository" in path
         ]
         repositories.append(
             RepositoryConfig(
@@ -132,11 +130,7 @@ def parse_workflow_content(content: str) -> WorkflowConfig:
         {},
     )
     repo_step: dict[str, Any] = next(
-        (
-            s["configure_repositories"]
-            for s in steps
-            if isinstance(s, dict) and "configure_repositories" in s
-        ),
+        (s["configure_repositories"] for s in steps if isinstance(s, dict) and "configure_repositories" in s),
         {},
     )
 
@@ -145,11 +139,7 @@ def parse_workflow_content(content: str) -> WorkflowConfig:
     source_package = branch_step.get("source_package", "")
 
     configured_repos = repo_step.get("repositories", [])
-    target_repositories = [
-        repo["name"]
-        for repo in configured_repos
-        if isinstance(repo, dict) and "name" in repo
-    ]
+    target_repositories = [repo["name"] for repo in configured_repos if isinstance(repo, dict) and "name" in repo]
 
     return WorkflowConfig(
         target_project=target_project,
@@ -218,16 +208,12 @@ def detect_pr_number(runner: CommandRunner = default_runner) -> int:
     raise ValueError(msg)
 
 
-def generate_obs_project_name(
-    target_project: str, owner: str, repo: str, pr_number: int
-) -> str:
+def generate_obs_project_name(target_project: str, owner: str, repo: str, pr_number: int) -> str:
     """Generate canonical OBS project name matching OBS SCM workflow rules."""
     return f"{target_project}:{owner}:{repo}:PR-{pr_number}"
 
 
-def resolve_context(
-    args: argparse.Namespace, runner: CommandRunner = default_runner
-) -> ProjectContext:
+def resolve_context(args: argparse.Namespace, runner: CommandRunner = default_runner) -> ProjectContext:
     """Resolve repository, PR, workflow, and OBS project context."""
     if args.repo:
         if "/" not in args.repo:
@@ -248,9 +234,7 @@ def resolve_context(
     else:
         pr_number = detect_pr_number(runner=runner)
 
-    workflow_path = (
-        Path(args.workflow).resolve() if args.workflow else find_workflow_file()
-    )
+    workflow_path = Path(args.workflow).resolve() if args.workflow else find_workflow_file()
     base_workflow = (
         parse_workflow_file(workflow_path)
         if workflow_path and workflow_path.is_file()
@@ -279,13 +263,7 @@ def resolve_context(
         msg = "Target project could not be resolved. Specify --target-project."
         raise ValueError(msg)
 
-    obs_project = (
-        args.project
-        if args.project
-        else generate_obs_project_name(
-            workflow.target_project, owner, repo, pr_number
-        )
-    )
+    obs_project = args.project or generate_obs_project_name(workflow.target_project, owner, repo, pr_number)
 
     return ProjectContext(
         owner=owner,
@@ -314,9 +292,7 @@ def verify_prerequisites(runner: CommandRunner = default_runner) -> None:
         raise RuntimeError(msg)
 
 
-def check_project_meta(
-    project: str, runner: CommandRunner = default_runner
-) -> tuple[bool, list[str]]:
+def check_project_meta(project: str, runner: CommandRunner = default_runner) -> tuple[bool, list[str]]:
     """Query project metadata and extract repository names."""
     res = runner(["osc", "meta", "prj", project])
     if res.returncode != 0 or "404" in res.stderr or "not found" in res.stderr.lower():
@@ -324,19 +300,13 @@ def check_project_meta(
 
     try:
         root = ET.fromstring(res.stdout)
-        repos = [
-            elem.attrib["name"]
-            for elem in root.findall("repository")
-            if "name" in elem.attrib
-        ]
+        repos = [elem.attrib["name"] for elem in root.findall("repository") if "name" in elem.attrib]
         return True, repos
     except ET.ParseError:
         return True, []
 
 
-def fetch_project_meta(
-    project: str, runner: CommandRunner = default_runner
-) -> ET.Element | None:
+def fetch_project_meta(project: str, runner: CommandRunner = default_runner) -> ET.Element | None:
     """Fetch project metadata as XML element, None if project missing or unparseable."""
     res = runner(["osc", "meta", "prj", project])
     if res.returncode != 0:
@@ -357,9 +327,7 @@ def build_repository_element(repo: RepositoryConfig) -> ET.Element:
     return element
 
 
-def configure_repositories(
-    context: ProjectContext, runner: CommandRunner = default_runner
-) -> bool:
+def configure_repositories(context: ProjectContext, runner: CommandRunner = default_runner) -> bool:
     """Apply missing build targets from workflow to the OBS PR project."""
     if not context.workflow.repositories:
         msg = "No repositories defined in workflow. Specify --workflow with configure_repositories."
@@ -372,20 +340,13 @@ def configure_repositories(
         print(f"Error: {msg}", file=sys.stderr)
         return False
 
-    existing = {
-        elem.attrib["name"]
-        for elem in root.findall("repository")
-        if "name" in elem.attrib
-    }
+    existing = {elem.attrib["name"] for elem in root.findall("repository") if "name" in elem.attrib}
     missing = [repo for repo in context.workflow.repositories if repo.name not in existing]
     if not missing:
         print(f"All repositories configured in {context.obs_project}.")
         return True
 
-    print(
-        f"Adding repositories {', '.join(repo.name for repo in missing)} "
-        f"to {context.obs_project}..."
-    )
+    print(f"Adding repositories {', '.join(repo.name for repo in missing)} to {context.obs_project}...")
     for repo in missing:
         root.append(build_repository_element(repo))
 
@@ -416,45 +377,29 @@ def configure_repositories(
     return True
 
 
-def list_packages(
-    project: str, runner: CommandRunner = default_runner
-) -> list[str]:
+def list_packages(project: str, runner: CommandRunner = default_runner) -> list[str]:
     """List packages defined in the OBS project."""
     res = runner(["osc", "ls", project])
     if res.returncode != 0:
         return []
-    return [
-        line.strip()
-        for line in res.stdout.splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    ]
+    return [line.strip() for line in res.stdout.splitlines() if line.strip() and not line.strip().startswith("#")]
 
 
-def list_package_files(
-    project: str, package: str, runner: CommandRunner = default_runner
-) -> list[str]:
+def list_package_files(project: str, package: str, runner: CommandRunner = default_runner) -> list[str]:
     """List source files in a package."""
     res = runner(["osc", "ls", project, package])
     if res.returncode != 0:
         return []
-    return [
-        line.strip()
-        for line in res.stdout.splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    ]
+    return [line.strip() for line in res.stdout.splitlines() if line.strip() and not line.strip().startswith("#")]
 
 
-def get_build_results(
-    project: str, runner: CommandRunner = default_runner
-) -> str:
+def get_build_results(project: str, runner: CommandRunner = default_runner) -> str:
     """Fetch build results summary for project."""
     res = runner(["osc", "results", "--show-excluded", project])
     return res.stdout.strip() if res.returncode == 0 else res.stderr.strip()
 
 
-def check_all_results_excluded_or_disabled(
-    project: str, runner: CommandRunner = default_runner
-) -> bool:
+def check_all_results_excluded_or_disabled(project: str, runner: CommandRunner = default_runner) -> bool:
     """Check if all build results in the project are excluded or disabled."""
     res = runner(["osc", "results", "--xml", project])
     if res.returncode != 0 or not res.stdout.strip():
@@ -488,9 +433,7 @@ def classify_health(report: DiagnosticReport, context: ProjectContext) -> None:
     """Classify health status and derive suggested action."""
     if not report.project_exists:
         report.status = HealthStatus.NOT_FOUND
-        report.suggested_action = (
-            "Project does not exist. Trigger workflow by reopening PR or using --recreate."
-        )
+        report.suggested_action = "Project does not exist. Trigger workflow by reopening PR or using --recreate."
         return
 
     has_repos = len(report.repositories) > 0
@@ -518,19 +461,13 @@ def classify_health(report: DiagnosticReport, context: ProjectContext) -> None:
             )
     elif report.all_results_excluded_or_disabled:
         report.status = HealthStatus.BROKEN_EXCLUDED_OR_DISABLED
-        report.suggested_action = (
-            "All results have state excluded/disabled. Run with --recreate to purge and cycle PR."
-        )
+        report.suggested_action = "All results have state excluded/disabled. Run with --recreate to purge and cycle PR."
     else:
         report.status = HealthStatus.HEALTHY
-        report.suggested_action = (
-            "Project is healthy. Use --rebuild if a rebuild is desired."
-        )
+        report.suggested_action = "Project is healthy. Use --rebuild if a rebuild is desired."
 
 
-def diagnose(
-    context: ProjectContext, runner: CommandRunner = default_runner
-) -> DiagnosticReport:
+def diagnose(context: ProjectContext, runner: CommandRunner = default_runner) -> DiagnosticReport:
     """Perform complete read-only diagnosis of OBS PR project."""
     exists, repos = check_project_meta(context.obs_project, runner=runner)
     if not exists:
@@ -544,15 +481,9 @@ def diagnose(
         if context.workflow.source_package in packages
         else (packages[0] if packages else "")
     )
-    files = (
-        list_package_files(context.obs_project, primary_package, runner=runner)
-        if primary_package
-        else []
-    )
+    files = list_package_files(context.obs_project, primary_package, runner=runner) if primary_package else []
     results = get_build_results(context.obs_project, runner=runner)
-    all_excluded = check_all_results_excluded_or_disabled(
-        context.obs_project, runner=runner
-    )
+    all_excluded = check_all_results_excluded_or_disabled(context.obs_project, runner=runner)
 
     report = DiagnosticReport(
         project_exists=True,
@@ -593,11 +524,7 @@ def format_report(report: DiagnosticReport, context: ProjectContext) -> str:
             if report.package_files and not source_files
             else f"{len(report.package_files)} files in primary"
         )
-        pkgs_summary = (
-            f"{', '.join(report.packages)} ({file_desc})"
-            if report.packages
-            else "None"
-        )
+        pkgs_summary = f"{', '.join(report.packages)} ({file_desc})" if report.packages else "None"
         lines.append(f"{'Packages:':<22} {pkgs_summary}")
 
         if report.build_results:
@@ -690,9 +617,7 @@ def recreate_project(
     return repair_after_cycle(context, runner=runner)
 
 
-def fetch_pr_head_commit(
-    context: ProjectContext, runner: CommandRunner = default_runner
-) -> tuple[str, str]:
+def fetch_pr_head_commit(context: ProjectContext, runner: CommandRunner = default_runner) -> tuple[str, str]:
     """Retrieve PR head repository full name and commit SHA."""
     repo_arg = f"{context.owner}/{context.repo}"
     res = runner([
@@ -716,9 +641,7 @@ def fetch_pr_head_commit(
     return full_name, sha
 
 
-def repair_branch(
-    context: ProjectContext, runner: CommandRunner = default_runner
-) -> bool:
+def repair_branch(context: ProjectContext, runner: CommandRunner = default_runner) -> bool:
     """Force-branch package and synchronize _branch_request."""
     src_prj = context.workflow.source_project
     src_pkg = context.workflow.source_package
@@ -762,9 +685,7 @@ def repair_branch(
     return True
 
 
-def rebuild_project(
-    context: ProjectContext, runner: CommandRunner = default_runner
-) -> bool:
+def rebuild_project(context: ProjectContext, runner: CommandRunner = default_runner) -> bool:
     """Trigger rebuild of packages in OBS PR project."""
     print(f"Triggering rebuild for project {context.obs_project}...")
     res = runner(["osc", "rebuild", "--all", context.obs_project])
@@ -899,8 +820,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ]
     if sum(bool(a) for a in actions_specified) > 1:
         print(
-            "Error: Only one of --recreate, --configure-repos, --repair-branch, "
-            "or --rebuild may be specified.",
+            "Error: Only one of --recreate, --configure-repos, --repair-branch, or --rebuild may be specified.",
             file=sys.stderr,
         )
         return 1

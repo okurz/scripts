@@ -8,9 +8,7 @@ import asyncio
 import httpx
 import typer
 
-app = typer.Typer(
-    help="Monitor GitLab CI jobs for specific log patterns.", add_completion=False
-)
+app = typer.Typer(help="Monitor GitLab CI jobs for specific log patterns.", add_completion=False)
 
 
 async def check_gitlab_jobs(
@@ -25,9 +23,7 @@ async def check_gitlab_jobs(
     # Project path needs to be URL-encoded (e.g., namespace/project -> namespace%2Fproject)
     project_id = project.replace("/", "%2F")
 
-    async with httpx.AsyncClient(
-        base_url=url, headers=headers, follow_redirects=True
-    ) as client:
+    async with httpx.AsyncClient(base_url=url, headers=headers, follow_redirects=True) as client:
         try:
             # 1. Fetch recent jobs
             # Using /jobs endpoint to get the latest jobs from the project
@@ -44,13 +40,8 @@ async def check_gitlab_jobs(
                     "canceled",
                 }:
                     # 2. Fetch job trace (log)
-                    trace_response = await client.get(
-                        f"/api/v4/projects/{project_id}/jobs/{job['id']}/trace"
-                    )
-                    if (
-                        trace_response.status_code == 200
-                        and search_term in trace_response.text
-                    ):
+                    trace_response = await client.get(f"/api/v4/projects/{project_id}/jobs/{job['id']}/trace")
+                    if trace_response.status_code == 200 and search_term in trace_response.text:
                         typer.secho(
                             f"[*] Match found in job {job['id']}:",
                             fg=typer.colors.GREEN,
@@ -63,14 +54,10 @@ async def check_gitlab_jobs(
                 typer.echo("No matching terms found in recent jobs.")
 
         except httpx.HTTPStatusError as e:
-            typer.secho(
-                f"Error fetching data from GitLab: {e}", fg=typer.colors.RED, err=True
-            )
+            typer.secho(f"Error fetching data from GitLab: {e}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=1) from e
         except Exception as e:
-            typer.secho(
-                f"An unexpected error occurred: {e}", fg=typer.colors.RED, err=True
-            )
+            typer.secho(f"An unexpected error occurred: {e}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=1) from e
 
 
@@ -80,18 +67,14 @@ def main(
         "qa-maintenance/bot-ng",
         help="The full path of the project (e.g. namespace/repo)",
     ),
-    job_name: str = typer.Option(
-        "approve increments", "--job", "-j", help="Name of the CI job to inspect"
-    ),
+    job_name: str = typer.Option("approve increments", "--job", "-j", help="Name of the CI job to inspect"),
     search_term: str = typer.Option(
         "End of reasons for not approving",
         "--search",
         "-s",
         help="The string to search for in the logs",
     ),
-    gitlab_url: str = typer.Option(
-        "https://gitlab.suse.de", "--url", "-u", help="Base URL of the GitLab instance"
-    ),
+    gitlab_url: str = typer.Option("https://gitlab.suse.de", "--url", "-u", help="Base URL of the GitLab instance"),
     token: str | None = typer.Option(
         None,
         "--token",
@@ -100,8 +83,7 @@ def main(
         help="GitLab API token (or set GITLAB_TOKEN env var)",
     ),
 ) -> None:
-    """
-    Monitor GitLab CI jobs and search logs for specific terms.
+    """Monitor GitLab CI jobs and search logs for specific terms.
 
     Example:
     python gitlab_monitor.py qa-maintenance/bot-ng --job "approve increments" --search "End of reasons"

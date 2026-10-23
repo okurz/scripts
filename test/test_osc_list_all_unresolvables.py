@@ -1,6 +1,4 @@
-"""
-tests for osc-list-unresolvables
-"""
+"""tests for osc-list-unresolvables"""
 
 import importlib.machinery
 import importlib.util
@@ -8,9 +6,7 @@ import os.path
 
 rootpath = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-loader = importlib.machinery.SourceFileLoader(
-    "sut", rootpath + "/osc-list-all-unresolvables"
-)
+loader = importlib.machinery.SourceFileLoader("sut", rootpath + "/osc-list-all-unresolvables")
 spec = importlib.util.spec_from_loader(loader.name, loader)
 sut = importlib.util.module_from_spec(spec)
 loader.exec_module(sut)

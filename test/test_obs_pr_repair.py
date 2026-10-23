@@ -57,9 +57,7 @@ pr:
 """
 
 
-def make_completed_process(
-    stdout: str = "", stderr: str = "", returncode: int = 0
-) -> subprocess.CompletedProcess[str]:
+def make_completed_process(stdout: str = "", stderr: str = "", returncode: int = 0) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(
         args=["mock"],
         returncode=returncode,
@@ -252,9 +250,7 @@ def test_parse_repository_definitions_skips_invalid_entries(
         ),
     ],
 )
-def test_parse_github_remote_url(
-    desc: str, url: str, expected: tuple[str, str] | None
-) -> None:
+def test_parse_github_remote_url(desc: str, url: str, expected: tuple[str, str] | None) -> None:
     assert sut.parse_github_remote_url(url) == expected, desc
 
 
@@ -282,17 +278,11 @@ def test_parse_github_remote_url(
 def test_generate_obs_project_name(
     desc: str, target_prj: str, owner: str, repo: str, pr_number: int, expected: str
 ) -> None:
-    assert (
-        sut.generate_obs_project_name(target_prj, owner, repo, pr_number) == expected
-    ), desc
+    assert sut.generate_obs_project_name(target_prj, owner, repo, pr_number) == expected, desc
 
 
 def test_detect_github_repo_from_origin() -> None:
-    runner = MagicMock(
-        return_value=make_completed_process(
-            stdout="git@github.com:os-autoinst/openQA.git\n"
-        )
-    )
+    runner = MagicMock(return_value=make_completed_process(stdout="git@github.com:os-autoinst/openQA.git\n"))
     owner, repo = sut.detect_github_repo(runner=runner)
     assert (owner, repo) == ("os-autoinst", "openQA")
 
@@ -321,9 +311,7 @@ def test_detect_pr_number_success() -> None:
 
 
 def test_detect_pr_number_failure() -> None:
-    runner = MagicMock(
-        return_value=make_completed_process(returncode=1, stderr="no pr")
-    )
+    runner = MagicMock(return_value=make_completed_process(returncode=1, stderr="no pr"))
     with pytest.raises(ValueError, match="Could not detect active PR number"):
         sut.detect_pr_number(runner=runner)
 
@@ -333,16 +321,14 @@ def test_resolve_context_cli_overrides(tmp_path: Path) -> None:
     workflow_file.write_text(SAMPLE_OPENQA_WORKFLOW, encoding="utf-8")
 
     parser = sut.create_parser()
-    args = parser.parse_args(
-        [
-            "--repo",
-            "custom-owner/custom-repo",
-            "--pr",
-            "PR-42",
-            "--workflow",
-            str(workflow_file),
-        ]
-    )
+    args = parser.parse_args([
+        "--repo",
+        "custom-owner/custom-repo",
+        "--pr",
+        "PR-42",
+        "--workflow",
+        str(workflow_file),
+    ])
 
     context = sut.resolve_context(args)
     assert context.owner == "custom-owner"
@@ -354,18 +340,16 @@ def test_resolve_context_cli_overrides(tmp_path: Path) -> None:
 
 def test_resolve_context_explicit_project_override() -> None:
     parser = sut.create_parser()
-    args = parser.parse_args(
-        [
-            "--repo",
-            "owner/repo",
-            "--pr",
-            "1",
-            "--project",
-            "home:someone:my-override",
-            "--target-project",
-            "devel:openQA:GitHub",
-        ]
-    )
+    args = parser.parse_args([
+        "--repo",
+        "owner/repo",
+        "--pr",
+        "1",
+        "--project",
+        "home:someone:my-override",
+        "--target-project",
+        "devel:openQA:GitHub",
+    ])
     context = sut.resolve_context(args)
     assert context.obs_project == "home:someone:my-override"
 
@@ -416,9 +400,7 @@ def test_verify_prerequisites_failures(
 
 def test_check_project_meta_found() -> None:
     xml_data = '<project name="test"><repository name="repo1"/><repository name="repo2"/></project>'
-    runner = MagicMock(
-        return_value=make_completed_process(stdout=xml_data, returncode=0)
-    )
+    runner = MagicMock(return_value=make_completed_process(stdout=xml_data, returncode=0))
     exists, repos = sut.check_project_meta("test", runner=runner)
     assert exists is True
     assert repos == ["repo1", "repo2"]
@@ -553,9 +535,7 @@ def test_diagnose_flow() -> None:
         if cmd[1] == "ls" and len(cmd) == 3:
             return make_completed_process(stdout="openQA\nopenQA:test\n")
         if cmd[1] == "ls" and len(cmd) == 4:
-            return make_completed_process(
-                stdout="_service\n_branch_request\n# comment\n"
-            )
+            return make_completed_process(stdout="_service\n_branch_request\n# comment\n")
         if cmd[1] == "results":
             return make_completed_process(stdout="openQA: succeeded\n")
         return make_completed_process()
@@ -642,16 +622,9 @@ def test_diagnose_flow() -> None:
         ),
     ],
 )
-def test_check_all_results_excluded_or_disabled(
-    desc: str, xml_content: str, returncode: int, expected: bool
-) -> None:
-    runner = MagicMock(
-        return_value=make_completed_process(stdout=xml_content, returncode=returncode)
-    )
-    assert (
-        sut.check_all_results_excluded_or_disabled("test-proj", runner=runner)
-        is expected
-    ), desc
+def test_check_all_results_excluded_or_disabled(desc: str, xml_content: str, returncode: int, expected: bool) -> None:
+    runner = MagicMock(return_value=make_completed_process(stdout=xml_content, returncode=returncode))
+    assert sut.check_all_results_excluded_or_disabled("test-proj", runner=runner) is expected, desc
 
 
 def test_diagnose_flow_excluded_or_disabled() -> None:
@@ -722,10 +695,7 @@ def test_configure_repositories_adds_missing_build_targets() -> None:
     api_calls = [cmd for cmd in calls if cmd[1] == "api"]
     assert len(api_calls) == 1
     assert api_calls[0][:4] == ["osc", "api", "-X", "PUT"]
-    assert (
-        api_calls[0][-1]
-        == "/source/devel:openQA:GitHub:os-autoinst:openQA:PR-7985/_meta"
-    )
+    assert api_calls[0][-1] == "/source/devel:openQA:GitHub:os-autoinst:openQA:PR-7985/_meta"
     assert '<repository name="openSUSE_Tumbleweed">' in state["meta"]
     assert '<path project="openSUSE:Factory"' in state["meta"]
     assert 'repository="snapshot"' in state["meta"]
@@ -747,11 +717,7 @@ def test_configure_repositories_skips_existing_repositories() -> None:
 
 def test_configure_repositories_missing_project() -> None:
     ctx = openqa_context()
-    runner = MagicMock(
-        return_value=make_completed_process(
-            returncode=1, stderr="HTTP Error 404: Not Found"
-        )
-    )
+    runner = MagicMock(return_value=make_completed_process(returncode=1, stderr="HTTP Error 404: Not Found"))
     assert sut.configure_repositories(ctx, runner=runner) is False
 
 
@@ -805,9 +771,7 @@ def test_repair_after_cycle_configures_missing_build_targets() -> None:
         "results_xml": HEALTHY_RESULTS_XML,
     }
     calls: list[list[str]] = []
-    ok = sut.repair_after_cycle(
-        ctx, runner=make_state_runner(state, calls), sleep=lambda s: None
-    )
+    ok = sut.repair_after_cycle(ctx, runner=make_state_runner(state, calls), sleep=lambda s: None)
     assert ok is True
     assert '<repository name="16.0">' in state["meta"]
     assert not any(cmd[1] == "branch" for cmd in calls)
@@ -817,14 +781,10 @@ def test_repair_after_cycle_rebranches_empty_package() -> None:
     ctx = openqa_context()
     state = {"meta": FULL_PRJ_META, "files": "", "results_xml": HEALTHY_RESULTS_XML}
     calls: list[list[str]] = []
-    ok = sut.repair_after_cycle(
-        ctx, runner=make_state_runner(state, calls), sleep=lambda s: None
-    )
+    ok = sut.repair_after_cycle(ctx, runner=make_state_runner(state, calls), sleep=lambda s: None)
     assert ok is True
     branches = [cmd for cmd in calls if cmd[1] == "branch"]
-    assert branches == [
-        ["osc", "branch", "-f", "devel:openQA", "openQA", ctx.obs_project, "openQA"]
-    ]
+    assert branches == [["osc", "branch", "-f", "devel:openQA", "openQA", ctx.obs_project, "openQA"]]
     assert any(cmd[-1].endswith("/openQA/_branch_request") for cmd in calls)
 
 
@@ -837,12 +797,7 @@ def test_repair_after_cycle_branch_failure() -> None:
         "branch_code": 1,
     }
     calls: list[list[str]] = []
-    assert (
-        sut.repair_after_cycle(
-            ctx, runner=make_state_runner(state, calls), sleep=lambda s: None
-        )
-        is False
-    )
+    assert sut.repair_after_cycle(ctx, runner=make_state_runner(state, calls), sleep=lambda s: None) is False
 
 
 def test_recreate_project_abort_on_prompt() -> None:
@@ -921,10 +876,7 @@ def test_repair_branch() -> None:
     ]
     assert calls[1][:3] == ["gh", "pr", "view"]
     assert calls[2][:4] == ["osc", "api", "-X", "PUT"]
-    assert (
-        calls[2][-1]
-        == "/source/devel:openQA:GitHub:os-autoinst:openQA:PR-7968/openQA/_branch_request"
-    )
+    assert calls[2][-1] == "/source/devel:openQA:GitHub:os-autoinst:openQA:PR-7968/openQA/_branch_request"
 
 
 def test_rebuild_project() -> None:
@@ -986,9 +938,7 @@ def test_find_and_parse_workflow_file(tmp_path: Path) -> None:
         ),
     ],
 )
-def test_resolve_context_validation_errors(
-    desc: str, args_list: list[str], expected_err: str
-) -> None:
+def test_resolve_context_validation_errors(desc: str, args_list: list[str], expected_err: str) -> None:
     parser = sut.create_parser()
     args = parser.parse_args(args_list)
     with pytest.raises(ValueError, match=expected_err):
@@ -996,9 +946,7 @@ def test_resolve_context_validation_errors(
 
 
 def test_check_project_meta_parse_error() -> None:
-    runner = MagicMock(
-        return_value=make_completed_process(stdout="not xml", returncode=0)
-    )
+    runner = MagicMock(return_value=make_completed_process(stdout="not xml", returncode=0))
     exists, repos = sut.check_project_meta("test", runner=runner)
     assert exists is True
     assert repos == []
@@ -1017,9 +965,7 @@ def test_list_packages_and_files_failure() -> None:
         ("reopen failure returns False", 0, 1, False),
     ],
 )
-def test_recreate_project_gh_failures(
-    desc: str, close_code: int, reopen_code: int, expected_success: bool
-) -> None:
+def test_recreate_project_gh_failures(desc: str, close_code: int, reopen_code: int, expected_success: bool) -> None:
     ctx = sut.ProjectContext(
         owner="os-autoinst",
         repo="openQA",
@@ -1047,9 +993,7 @@ def test_fetch_pr_head_commit_failure() -> None:
         workflow=sut.WorkflowConfig("", "", ""),
         obs_project="proj",
     )
-    runner = MagicMock(
-        return_value=make_completed_process(returncode=1, stderr="gh error")
-    )
+    runner = MagicMock(return_value=make_completed_process(returncode=1, stderr="gh error"))
     with pytest.raises(RuntimeError, match="Failed to inspect PR"):
         sut.fetch_pr_head_commit(ctx, runner=runner)
 
@@ -1061,9 +1005,7 @@ def test_fetch_pr_head_commit_failure() -> None:
         ("osc api failure returns False", 0, 1, False),
     ],
 )
-def test_repair_branch_failures(
-    desc: str, branch_code: int, api_code: int, expected_success: bool
-) -> None:
+def test_repair_branch_failures(desc: str, branch_code: int, api_code: int, expected_success: bool) -> None:
     ctx = sut.ProjectContext(
         owner="os-autoinst",
         repo="openQA",
@@ -1097,9 +1039,7 @@ def test_rebuild_project_failure() -> None:
         workflow=sut.WorkflowConfig("", "", ""),
         obs_project="proj",
     )
-    runner = MagicMock(
-        return_value=make_completed_process(returncode=1, stderr="rebuild fail")
-    )
+    runner = MagicMock(return_value=make_completed_process(returncode=1, stderr="rebuild fail"))
     assert sut.rebuild_project(ctx, runner=runner) is False
 
 

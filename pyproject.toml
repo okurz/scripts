@@ -1,0 +1,232 @@
+[project]
+name = "scripts"
+version = "0.0.0"
+description = "Personal admin, openQA, OBS/gitea, and git helper scripts."
+requires-python = "~=3.13.0"
+license = "MIT"
+authors = [{ name = "Oliver Kurz" }]
+
+dependencies = [
+    "httpx",
+    "python-dateutil",
+    "PyYAML",
+    "requests",
+    "selenium",
+    "typer",
+]
+
+[dependency-groups]
+dev = [
+    "coverage",
+    "gitlint",
+    "pre-commit",
+    "pytest",
+    "pytest-cov",
+    "pytest-mock",
+    "pytest-xdist",
+    "responses",
+    "ruff",
+    "ty",
+    "vulture",
+]
+
+[tool.coverage.run]
+source = ["."]
+branch = true
+omit = [
+    "test/*",
+    # Local-only files excluded via .git/info/exclude; they are not part of the repo
+    "dbcli.py",
+    "dropbox.py",
+    "freetz_start_service.py",
+    "huffman.py",
+    "pdfsizeopt.py",
+    "pyDropboxPath.py",
+    "smsgui.py",
+    "smsmngr.py",
+    "write_tsocks_conf.py",
+]
+
+[tool.coverage.report]
+# Ratchet baseline measured on 2026-10-23; plan 001_I raises this to 100
+fail_under = 71
+show_missing = true
+skip_covered = true
+
+[tool.pytest.ini_options]
+addopts = "-p no:anyio -p no:doctest -p no:pastebin -p no:nose"
+testpaths = ["test"]
+python_files = "test_*.py"
+
+[tool.ruff]
+line-length = 120
+preview = true
+
+[tool.ruff.lint]
+extend-select = [
+    "A",
+    "ANN",
+    "ARG",
+    "ASYNC",
+    "B",
+    "BLE",
+    "C4",
+    "C90",
+    "COM",
+    "D",
+    "DTZ",
+    "EM",
+    "ERA",
+    "EXE",
+    "FA",
+    "FBT",
+    "FIX",
+    "FLY",
+    "G",
+    "ICN",
+    "INP",
+    "INT",
+    "I",
+    "ISC",
+    "LOG",
+    "N",
+    "NPY",
+    "PD",
+    "PERF",
+    "PGH",
+    "PIE",
+    "PL",
+    "PT",
+    "PTH",
+    "PYI",
+    "Q",
+    "RSE",
+    "RET",
+    "RUF0",
+    "RUF100",
+    "S",
+    "SIM",
+    "SLF",
+    "T10",
+    "T20",
+    "TC",
+    "TD",
+    "TID",
+    "TRY",
+    "UP",
+    "W",
+    "YTT",
+]
+ignore = [
+    "incorrect-blank-line-before-class",
+    "len-test",
+    "multi-line-summary-second-line",
+    "too-many-public-methods",
+    "docstring-missing-returns",
+    "docstring-missing-exception",
+    "missing-trailing-comma",
+    # Ratchet baseline, removed by the plan tasks named here
+    "T201",          # 001_B7: print is the product of these CLI scripts
+    "N806",          # 001_B3
+    "N812",          # 001_B3
+    "ERA001",        # 001_B3
+    "FIX002",        # 001_B3
+    "TD002",         # 001_B3
+    "TD003",         # 001_B3
+    "TD004",         # 001_B3
+    "A002",          # 001_B3
+    "PLW2901",       # 001_B3
+    "ARG001",        # 001_B3
+    "ARG005",        # 001_B3
+    "D100",          # 001_B1
+    "D103",          # 001_B1
+    "D200",          # 001_B1
+    "D205",          # 001_B1
+    "D400",          # 001_B1
+    "D413",          # 001_B1
+    "D415",          # 001_B1
+    "RUF005",        # 001_B1
+    "PLW0108",       # 001_B1
+    "ANN001",        # 001_B6
+    "ANN201",        # 001_B6
+    "ANN002",        # 001_B6
+    "PTH",           # 001_B5
+    "S105",          # 001_B5
+    "S108",          # 001_B5
+    "S404",          # 001_B5
+    "S603",          # 001_B5
+    "S607",          # 001_B5
+    "C901",          # 001_B4
+    "PLR0911",       # 001_B4
+    "PLR0912",       # 001_B4
+    "PLR0913",       # 001_B4
+    "PLR0914",       # 001_B4
+    "PLR0915",       # 001_B4
+    "PLW0717",       # 001_B4
+    "FBT001",        # 001_B5
+    "FBT002",        # 001_B5
+    "FBT003",        # 001_B5
+    "PLR2004",       # 001_B5
+    "PLR0917",       # 001_B4
+    "PLR6201",       # 001_B1
+    "UP031",         # 001_B1
+    "UP042",         # 001_B1
+    "G002",          # 001_B1
+    "EM102",         # 001_B5
+    "TRY003",        # 001_B5
+    "TRY300",        # 001_B4
+    "PLW1514",       # 001_B5
+    "PERF401",       # 001_B1
+    "SIM108",        # 001_B1
+    "SIM112",        # 001_B1
+    "SIM115",        # 001_B1
+    "FURB110",       # 001_B1
+    "C414",          # 001_B1
+    "C417",          # 001_B1
+    "TC003",         # 001_B1
+    "B905",          # 001_B5
+    "ANN202",        # 001_B6
+    "D101",          # 001_B1
+    "D102",          # 001_B1
+    "D401",          # 001_B1
+    "ICN001",        # 001_B3
+    "DTZ005",        # 001_B5
+    "S113",          # 001_B5
+    "S101",          # 001_F1 (assert in osc-list-all-unresolvables stub)
+    "F821",          # 001_F1 (undefined sql_query in the same stub)
+    "S602",          # 001_E4 (curl|grep|sed pipeline in suse-qa-sle-etherpad-status)
+    "S314",          # accepted: OBS/IBS metadata is trusted, defusedxml buys nothing
+    "S405",          # accepted: same as S314
+    "S608",          # accepted: psql -c string in openqa-db_query_last_use_of_module
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 9
+
+[tool.ruff.lint.per-file-ignores]
+"test/*" = [
+    "any-type",
+    "assert",
+    "hardcoded-password-func-arg",
+    "hardcoded-password-string",
+    "implicit-namespace-package",
+    "invalid-rule-code",
+    "magic-value-comparison",
+    "missing-return-type-undocumented-public-function",
+    "missing-type-function-argument",
+    "too-many-arguments",
+    "too-many-positional-arguments",
+    "undocumented-public-function",
+]
+"gitea-review-cleanup" = ["B008"]
+"osc-sync-deps" = ["B008"]
+"osc-sync-leap" = ["B008"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ty.terminal]
+error-on-warning = true
+
+[tool.ty.environment]
+python = ".venv"

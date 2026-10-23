@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Remove my review requests from draft and/or forwarded pull requests on a Gitea instance."""
+
 from __future__ import annotations
 
 import sys
@@ -101,10 +102,7 @@ def search_review_requested(client: httpx.Client) -> list[PullMatch]:
     matches: list[PullMatch] = []
     page = 1
     while True:
-        url = (
-            "/api/v1/repos/issues/search"
-            f"?review_requested=true&type=pulls&state=open&limit={PAGE_SIZE}&page={page}"
-        )
+        url = f"/api/v1/repos/issues/search?review_requested=true&type=pulls&state=open&limit={PAGE_SIZE}&page={page}"
         _, payload = request(client, "GET", url)
         items = payload if isinstance(payload, list) else payload.get("data", [])
         matches.extend(item_to_match(item) for item in items)
@@ -115,9 +113,7 @@ def search_review_requested(client: httpx.Client) -> list[PullMatch]:
 
 @app.command()
 def main(
-    base_url: str = typer.Option(
-        DEFAULT_BASE_URL, "--base-url", help="Gitea instance base URL."
-    ),
+    base_url: str = typer.Option(DEFAULT_BASE_URL, "--base-url", help="Gitea instance base URL."),
     token_file: Path = typer.Option(
         Path(DEFAULT_TOKEN_FILE),
         "--token-file",
@@ -128,15 +124,9 @@ def main(
         "--select",
         help="Which PRs to unassign: drafts | forwarded | both.",
     ),
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="Only list matching PRs, change nothing."
-    ),
-    limit: int = typer.Option(
-        0, "--limit", help="Safety cap on the number of PRs to process (0 = no cap)."
-    ),
-    request_delay: float = typer.Option(
-        0.1, "--request-delay", help="Delay in seconds between unassign requests."
-    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Only list matching PRs, change nothing."),
+    limit: int = typer.Option(0, "--limit", help="Safety cap on the number of PRs to process (0 = no cap)."),
+    request_delay: float = typer.Option(0.1, "--request-delay", help="Delay in seconds between unassign requests."),
 ) -> None:
     selector = SELECTORS.get(select)
     if selector is None:
@@ -155,8 +145,7 @@ def main(
         matches = [m for m in search_review_requested(client) if selector(m)]
         capped = matches[:limit] if limit else matches
         typer.echo(
-            f"review-requested open PRs matching: {len(matches)}"
-            + (f" | capped to {len(capped)}" if limit else "")
+            f"review-requested open PRs matching: {len(matches)}" + (f" | capped to {len(capped)}" if limit else "")
         )
         if dry_run:
             for match in capped:
@@ -185,11 +174,7 @@ def main(
                 time.sleep(request_delay)
 
         capped_keys = {(m.repo, m.number) for m in capped}
-        remaining = [
-            m
-            for m in search_review_requested(client)
-            if selector(m) and (m.repo, m.number) in capped_keys
-        ]
+        remaining = [m for m in search_review_requested(client) if selector(m) and (m.repo, m.number) in capped_keys]
         typer.echo(
             f"done: unassigned={unassigned} skipped={skipped} failed={len(failed)}"
             f" | still requesting my review: {len(remaining)}"

@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
-"""
-reference:
+"""reference:
 http://stackoverflow.com/questions/623764/find-non-utf8-filenames-on-linux-file-system
 """
 
@@ -20,7 +19,7 @@ def walk(dir):
 paths = []
 for path in walk("."):
     try:
-        u = unicode(path, "utf-8")  # noqa: F821
+        u = unicode(path, "utf-8")
     except UnicodeError:
         paths.append(path)
 
