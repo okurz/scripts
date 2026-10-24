@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# Download a Vimeo video from a /reviews/<token>/videos/<id> share link.
+# yt-dlp's vimeo extractor has no review/dpc support and its web API client
+# requires a logged-in session cookie, so render the page headlessly to obtain
+# the signed player config URL and hand its HLS manifest to yt-dlp's generic
+# extractor. CDN signatures expire after a few hours: rerun to refresh them.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+usage: vimeo-review-dl <review-url> [output-dir]   # default output-dir: ~/Downloads
+  LIST=1  print available formats, download nothing
+  FMT=<yt-dlp format>  override "bestvideo+bestaudio/best"
+  CHROME=<browser>  chromium (default) or google-chrome
+EOF
+  exit 2
+}
+
+[[ ${1:-} == */videos/* ]] || usage
+browser=${CHROME:-chromium}
+for dep in "$browser" ffmpeg yt-dlp python3; do
+  command -v "$dep" > /dev/null || { echo "missing dependency: $dep"; exit 1; }
+done
+review_url=$1
+outdir=${2:-$HOME/Downloads}
+ua=${UA:-Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36}
+fmt=${FMT:-bestvideo+bestaudio/best}
+
+dom=$(mktemp)
+profile=$(mktemp -d)
+trap 'rm -f "$dom"; rm -rf "$profile"' EXIT
+
+timeout "${RENDER_TIMEOUT:-90}" "$browser" --headless=new --disable-gpu --no-sandbox \
+  --user-data-dir="$profile" --user-agent="$ua" --virtual-time-budget="${VTB:-15000}" \
+  --dump-dom "$review_url" > "$dom" 2>/dev/null
+
+IFS=$'\t' read -r manifest title duration < <(python3 - "$dom" "$ua" <<'PY'
+import json, re, sys, urllib.request
+
+dom = open(sys.argv[1], encoding='utf-8', errors='replace').read()
+
+
+def config_urls(dom):
+    out = []
+    for m in re.finditer(r'https://player\.vimeo\.com/video/\d+/config', dom):
+        i, buf = m.start(), []
+        while i < len(dom):
+            if dom[i] == '"':
+                break
+            if dom.startswith('\\u0026', i):
+                buf.append('&')
+                i += 6
+                continue
+            if dom[i] == '\\':
+                break
+            buf.append(dom[i])
+            i += 1
+        out.append(''.join(buf))
+    return sorted(out, key=len)
+
+
+urls = config_urls(dom)
+if not urls:
+    sys.exit('no player config URL in the rendered page: review link expired, '
+             'rate-limited, or not accessible anonymously')
+req = urllib.request.Request(urls[-1], headers={
+    'User-Agent': sys.argv[2],
+    'Referer': 'https://vimeo.com/',
+    'Accept': 'application/json',
+})
+cfg = json.load(urllib.request.urlopen(req))
+cdns = (cfg.get('request', {}).get('files', {}).get('hls', {})).get('cdns') or {}
+if not cdns:
+    sys.exit('no HLS cdn in config: ' + json.dumps(cfg)[:300])
+cdn = cdns.get('fastly_skyfire') or list(cdns.values())[0]
+print(cdn['url'], cfg['video']['title'], cfg['video'].get('duration'), sep='\t')
+PY
+)
+
+name=$(echo "$title" | sed 's,[/ ],_,g')
+printf 'title=%s duration=%ss manifest host=%s\n' "$title" "$duration" "${manifest#*//}"
+
+if [[ ${LIST:-0} == 1 ]]; then
+  exec yt-dlp -F --referer https://player.vimeo.com/ "$manifest"
+fi
+
+mkdir -p "$outdir"
+cd "$outdir"
+yt-dlp -f "$fmt" --merge-output-format mp4 --no-part \
+  --referer https://player.vimeo.com/ \
+  --progress-template 'download:%(progress._percent_str)s %(progress._speed_str)s ETA %(progress._eta_str)s' \
+  --quiet -o "$name.%(ext)s" "$manifest"
+
+# yt-dlp's generic extractor reports title=NA for a bare manifest, so write the
+# config title in a lossless remux pass
+ffmpeg -y -loglevel error -i "$name.mp4" -c copy -metadata title="$title" "$name.meta.mp4"
+mv -f "$name.meta.mp4" "$name.mp4"
+printf '%s/%s.mp4\n' "$outdir" "$name"
