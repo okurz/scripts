@@ -1,4 +1,4 @@
-"""tests for osc-list-unresolvables"""
+"""tests for osc-list-unresolvables."""
 
 import importlib.machinery
 import importlib.util

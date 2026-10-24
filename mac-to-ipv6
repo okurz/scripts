@@ -3,16 +3,13 @@
 import os
 import sys
 
-if len(sys.argv) < 2:
-    mac = input("Enter mac of host: ")
-else:
-    mac = sys.argv[1]
-prefix = os.environ["prefix"] if os.environ["prefix"] else ""
+mac = input("Enter mac of host: ") if len(sys.argv) < 2 else sys.argv[1]
+prefix = os.environ["prefix"] if os.environ["prefix"] else ""  # noqa: SIM112 - env var name is the user interface
 byte_strings = mac.split(":")
-fffe_inserted = byte_strings[:3] + ["ff", "fe"] + byte_strings[3:]
+fffe_inserted = [*byte_strings[:3], "ff", "fe", *byte_strings[3:]]
 flipped_bit = hex(int(fffe_inserted[0], 16) ^ 0b00000010)
 fffe_inserted[0] = flipped_bit.split("x", 1)[1]
-v6_notation = list(zip(fffe_inserted[0::2], fffe_inserted[1::2]))
-v6_notation = list(map(lambda x: "".join(x), v6_notation))
+v6_notation = list(zip(fffe_inserted[0::2], fffe_inserted[1::2], strict=False))
+v6_notation = ["".join(x) for x in v6_notation]
 v6_notation = ":".join(v6_notation)
 print(prefix + v6_notation)

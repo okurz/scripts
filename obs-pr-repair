@@ -18,7 +18,7 @@ import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +29,7 @@ GITHUB_REMOTE_REGEX = re.compile(
 )
 
 
-class HealthStatus(str, Enum):
+class HealthStatus(StrEnum):
     """Health classification for an OBS PR staging project."""
 
     HEALTHY = "HEALTHY"
@@ -584,7 +584,7 @@ def recreate_project(
             f"and cycle PR #{context.pr_number}? [y/N]: "
         )
         confirm = input(prompt).strip().lower()
-        if confirm not in ("y", "yes"):
+        if confirm not in {"y", "yes"}:
             print("Aborted.")
             return False
 

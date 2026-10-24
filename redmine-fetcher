@@ -5,6 +5,8 @@ from pathlib import Path
 
 import requests
 
+REQUEST_TIMEOUT = 30
+
 
 def load_config():
     config_path = Path.home() / ".query_redminerc"
@@ -32,7 +34,7 @@ def fetch_ticket(ticket_id):
         headers["X-Redmine-API-Key"] = token
 
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         data = response.json()
         issue = data.get("issue", {})

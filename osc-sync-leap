@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os
+import pathlib
 import re
 import subprocess
 
@@ -18,7 +18,7 @@ def run_command(cmd: list[str], dry_run: bool = False, capture_output: bool = Fa
             if "ls-tree" in cmd:
                 return "file1\nfile2"
             if "rev-parse" in cmd and "--show-toplevel" in cmd:
-                return os.getcwd()
+                return str(pathlib.Path.cwd())
         print(f"[DRY-RUN] {' '.join(cmd)}")
         return ""
 
@@ -39,7 +39,7 @@ def sync(
     """Sync Leap branches from Factory for ANY openSUSE package using the git-workflow."""
     # 0. Get package name from repository root directory name
     repo_root = run_command(["git", "rev-parse", "--show-toplevel"], capture_output=True, dry_run=dry_run)
-    package_name = os.path.basename(repo_root) if repo_root else "package"
+    package_name = pathlib.Path(repo_root).name if repo_root else "package"
 
     # 1. Get Factory hash from upstream
     try:
@@ -66,13 +66,10 @@ def sync(
         )
         tracked_files = tracked_files_output.splitlines()
 
-        files_to_remove = []
-        for f in tracked_files:
-            if dry_run or os.path.isfile(f):
-                files_to_remove.append(f)
+        files_to_remove = [f for f in tracked_files if dry_run or pathlib.Path(f).is_file()]
 
         if files_to_remove:
-            run_command(["git", "rm"] + files_to_remove, dry_run=dry_run)
+            run_command(["git", "rm", *files_to_remove], dry_run=dry_run)
 
         # Checkout from factory
         run_command(["git", "checkout", f"{upstream}/factory", "--", "."], dry_run=dry_run)

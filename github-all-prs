@@ -13,7 +13,7 @@ app = typer.Typer(help="List GitHub PRs needing review or work in Slack-compatib
 def run_gh(args: list[str]) -> str | None:
     """Execute a gh CLI command and return its stdout."""
     try:
-        res = subprocess.run(["gh"] + args, capture_output=True, text=True, check=True)
+        res = subprocess.run(["gh", *args], capture_output=True, text=True, check=True)
         return res.stdout.strip()
     except subprocess.CalledProcessError:
         return None
@@ -68,7 +68,7 @@ def has_unanswered_changes_requested(pr: dict, me: str) -> bool:
 def needs_review_filter(pr: dict, me: str) -> str | None:
     """PR is ready for review by others (CI success, no unanswered changes requested)."""
     checks = pr.get("statusCheckRollup", [])
-    if any(c.get("conclusion") in ["FAILURE", "ACTION_REQUIRED", "TIMED_OUT", "CANCELLED", "ERROR"] for c in checks):
+    if any(c.get("conclusion") in {"FAILURE", "ACTION_REQUIRED", "TIMED_OUT", "CANCELLED", "ERROR"} for c in checks):
         return None
     if not has_unanswered_changes_requested(pr, me):
         return f"* {pr['url']} {pr['title']}"
@@ -80,7 +80,7 @@ def needs_work_filter(pr: dict, me: str) -> str | None:
     reasons = []
     # Check CI failures
     checks = pr.get("statusCheckRollup", [])
-    if any(c.get("conclusion") in ["FAILURE", "ACTION_REQUIRED", "TIMED_OUT", "CANCELLED", "ERROR"] for c in checks):
+    if any(c.get("conclusion") in {"FAILURE", "ACTION_REQUIRED", "TIMED_OUT", "CANCELLED", "ERROR"} for c in checks):
         reasons.append("CI failing")
     # Check Review Decision
     if has_unanswered_changes_requested(pr, me):

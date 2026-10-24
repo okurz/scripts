@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """reference:
-http://stackoverflow.com/questions/623764/find-non-utf8-filenames-on-linux-file-system
+http://stackoverflow.com/questions/623764/find-non-utf8-filenames-on-linux-file-system.
 """
 
 import os

@@ -755,7 +755,7 @@ def test_repair_after_cycle_project_not_recreated() -> None:
     ok = sut.repair_after_cycle(
         ctx,
         runner=fake_runner,
-        sleep=lambda s: sleeps.append(s),
+        sleep=sleeps.append,
         timeout=20,
         interval=10,
     )

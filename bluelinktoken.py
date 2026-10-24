@@ -23,7 +23,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 
 def main():
-    """Determine brand to get the refresh token for"""
+    """Determine brand to get the refresh token for."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--brand",

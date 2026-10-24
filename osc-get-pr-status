@@ -18,12 +18,9 @@ def get_detailed_results(project: str, package: str):
 
 def parse_unresolvables(output: str):
     """Parses the output of 'osc results -v' to extract the 'nothing provides' lines."""
-    unresolvables = []
     lines = output.splitlines()
-    for line in lines:
-        if "nothing provides" in line:
-            unresolvables.append(line.strip())
-    return sorted(list(set(unresolvables)))
+    unresolvables = [line.strip() for line in lines if "nothing provides" in line]
+    return sorted(set(unresolvables))
 
 
 @app.command()

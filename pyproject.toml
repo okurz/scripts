@@ -125,73 +125,56 @@ ignore = [
     "docstring-missing-returns",
     "docstring-missing-exception",
     "missing-trailing-comma",
-    # Ratchet baseline, removed by the plan tasks named here
+    # Ratchet baseline, removed by the plan task named here
     "T201",          # 001_B7: print is the product of these CLI scripts
+    "FBT001",        # 001_B7: typer CLI parameters are keyword-only by construction
+    "FBT002",        # 001_B7
+    "FBT003",        # 001_B7
     "N806",          # 001_B3
-    "N812",          # 001_B3
+    "N812",          # accepted: selenium docs use the EC alias
+    "A002",          # 001_B2 (find_non_utf8 rewrite)
+    "D205",          # 001_B2 (find_non_utf8 rewrite)
     "ERA001",        # 001_B3
     "FIX002",        # 001_B3
     "TD002",         # 001_B3
     "TD003",         # 001_B3
     "TD004",         # 001_B3
-    "A002",          # 001_B3
     "PLW2901",       # 001_B3
     "ARG001",        # 001_B3
     "ARG005",        # 001_B3
-    "D100",          # 001_B1
-    "D103",          # 001_B1
-    "D200",          # 001_B1
-    "D205",          # 001_B1
-    "D400",          # 001_B1
-    "D413",          # 001_B1
-    "D415",          # 001_B1
-    "RUF005",        # 001_B1
-    "PLW0108",       # 001_B1
+    "ICN001",        # 001_B3
+    "D100",          # 001_B3
+    "D101",          # 001_B3
+    "D102",          # 001_B3
+    "D103",          # 001_B3
+    "D401",          # 001_B3
     "ANN001",        # 001_B6
-    "ANN201",        # 001_B6
     "ANN002",        # 001_B6
-    "PTH",           # 001_B5
+    "ANN201",        # 001_B6
+    "ANN202",        # 001_B6
+    "PTH100",        # 001_B5
+    "PTH112",        # 001_B5
+    "PTH118",        # 001_B5
+    "PTH120",        # 001_B5
+    "PTH208",        # 001_B5
     "S105",          # 001_B5
     "S108",          # 001_B5
     "S404",          # 001_B5
     "S603",          # 001_B5
     "S607",          # 001_B5
+    "PLW1514",       # 001_B5
+    "EM102",         # 001_B5
+    "TRY003",        # 001_B5
+    "PLR2004",       # 001_B5
     "C901",          # 001_B4
     "PLR0911",       # 001_B4
     "PLR0912",       # 001_B4
     "PLR0913",       # 001_B4
     "PLR0914",       # 001_B4
     "PLR0915",       # 001_B4
-    "PLW0717",       # 001_B4
-    "FBT001",        # 001_B5
-    "FBT002",        # 001_B5
-    "FBT003",        # 001_B5
-    "PLR2004",       # 001_B5
     "PLR0917",       # 001_B4
-    "PLR6201",       # 001_B1
-    "UP031",         # 001_B1
-    "UP042",         # 001_B1
-    "G002",          # 001_B1
-    "EM102",         # 001_B5
-    "TRY003",        # 001_B5
+    "PLW0717",       # 001_B4
     "TRY300",        # 001_B4
-    "PLW1514",       # 001_B5
-    "PERF401",       # 001_B1
-    "SIM108",        # 001_B1
-    "SIM112",        # 001_B1
-    "SIM115",        # 001_B1
-    "FURB110",       # 001_B1
-    "C414",          # 001_B1
-    "C417",          # 001_B1
-    "TC003",         # 001_B1
-    "B905",          # 001_B5
-    "ANN202",        # 001_B6
-    "D101",          # 001_B1
-    "D102",          # 001_B1
-    "D401",          # 001_B1
-    "ICN001",        # 001_B3
-    "DTZ005",        # 001_B5
-    "S113",          # 001_B5
     "S101",          # 001_F1 (assert in osc-list-all-unresolvables stub)
     "F821",          # 001_F1 (undefined sql_query in the same stub)
     "S602",          # 001_E4 (curl|grep|sed pipeline in suse-qa-sle-etherpad-status)

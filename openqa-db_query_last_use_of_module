@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""Helper script to find where a test module I want to change has been run last
+"""Helper script to find where a test module I want to change has been run last.
 
 As a test developer I would like to know where the test module I want to
 change is triggered so that I could identify good candidates for validation
@@ -42,7 +42,7 @@ def parse_args():
 
 
 def call(cmds, dry_run=False):
-    log.debug("call: %s" % cmds)
+    log.debug("call: %s", cmds)
     return subprocess.call((["echo", "Simulating: "] if dry_run else []) + cmds)
 
 
@@ -50,7 +50,7 @@ def main():
     args = parse_args()
     sql_query = f"select distinct distri,version,flavor,test,arch,machine from jobs where id in (select job_id from job_modules where (name='{args.module}')and t_updated > now() - interval '{args.age}') limit {args.limit};"
     call(
-        ["ssh", args.openqa_host] + [f'sudo -u geekotest psql -t --command="{sql_query}" openqa'],
+        ["ssh", args.openqa_host, f'sudo -u geekotest psql -t --command="{sql_query}" openqa'],
         args.dry_run,
     )
 

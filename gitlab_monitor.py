@@ -87,6 +87,7 @@ def main(
 
     Example:
     python gitlab_monitor.py qa-maintenance/bot-ng --job "approve increments" --search "End of reasons"
+
     """
     asyncio.run(check_gitlab_jobs(gitlab_url, project, job_name, search_term, token))
 

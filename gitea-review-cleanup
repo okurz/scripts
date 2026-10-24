@@ -5,13 +5,15 @@ from __future__ import annotations
 
 import sys
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import typer
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -81,7 +83,7 @@ def request(
         response = client.request(method, path, json=body)
         if is_throttled(response):
             continue
-        if response.status_code in (404, 410):
+        if response.status_code in {404, 410}:
             return response.status_code, None
         if response.status_code >= 400:
             raise APIError(f"{method} {path} -> {response.status_code}: {response.text[:140]}")
@@ -163,10 +165,10 @@ def main(
                     f"/api/v1/repos/{match.repo}/pulls/{match.number}/requested_reviewers",
                     body={"reviewers": [login]},
                 )
-                status_label = "skip" if status in (404, 410) else "unassigned"
+                status_label = "skip" if status in {404, 410} else "unassigned"
                 typer.echo(f"{status_label} {match.label}")
-                skipped += status in (404, 410)
-                unassigned += status not in (404, 410)
+                skipped += status in {404, 410}
+                unassigned += status not in {404, 410}
             except APIError as err:
                 failed.append(f"{match.label}: {err}")
                 typer.echo(f"FAILED {err}", err=True)

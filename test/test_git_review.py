@@ -1,4 +1,4 @@
-"""tests for git-upstream-base, git review and git review-branch"""
+"""tests for git-upstream-base, git review and git review-branch."""
 
 import os
 import re
@@ -54,7 +54,7 @@ def run_interactive(work, keys):
 
 def git(work, *args):
     return subprocess.run(
-        ["git"] + COMMIT_CONFIG + list(args),
+        ["git", *COMMIT_CONFIG, *list(args)],
         cwd=str(work),
         capture_output=True,
         text=True,
