@@ -4,10 +4,11 @@ import os
 import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
-rootpath = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+rootpath = str(Path(__file__).resolve().parent.parent)
 
 COMMIT_CONFIG = [
     "-c",

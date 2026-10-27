@@ -24,6 +24,7 @@ from typing import Any
 
 import yaml
 
+REMOTE_FIELDS = 2
 GITHUB_REMOTE_REGEX = re.compile(
     r"(?:git@github\.com:|https?://github\.com/)(?P<owner>[^/]+)/(?P<repo>[^/.]+)(?:\.git)?"
 )
@@ -185,7 +186,7 @@ def detect_github_repo(runner: CommandRunner = default_runner) -> tuple[str, str
     if remotes_res.returncode == 0:
         for line in remotes_res.stdout.splitlines():
             parts = line.split()
-            if len(parts) >= 2:
+            if len(parts) >= REMOTE_FIELDS:
                 parsed = parse_github_remote_url(parts[1])
                 if parsed:
                     return parsed
@@ -300,10 +301,10 @@ def check_project_meta(project: str, runner: CommandRunner = default_runner) -> 
 
     try:
         root = ET.fromstring(res.stdout)
-        repos = [elem.attrib["name"] for elem in root.findall("repository") if "name" in elem.attrib]
-        return True, repos
     except ET.ParseError:
         return True, []
+    repos = [elem.attrib["name"] for elem in root.findall("repository") if "name" in elem.attrib]
+    return True, repos
 
 
 def fetch_project_meta(project: str, runner: CommandRunner = default_runner) -> ET.Element | None:

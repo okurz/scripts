@@ -914,8 +914,9 @@ def test_find_and_parse_workflow_file(tmp_path: Path) -> None:
     parsed = sut.parse_workflow_file(wf)
     assert parsed.source_package == "openQA"
 
-    not_found = sut.find_workflow_file(Path("/tmp"))
-    assert not_found is None or not_found.name == "workflows.yml"
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    assert sut.find_workflow_file(empty_dir) == wf
 
 
 @pytest.mark.parametrize(

@@ -125,9 +125,18 @@ ignore = [
     "incorrect-blank-line-before-class",
     "multi-line-summary-second-line",
     "missing-trailing-comma",  # accepted: COM812 fights ruff format
+    "N812",          # accepted: selenium docs use the EC alias
+    "S404",          # accepted: these scripts shell out to osc, ssh, git by design
+    "S603",          # accepted: same as S404
+    "S607",          # accepted: same as S404
+    "S602",          # accepted: curl|grep|sed pipeline in suse-qa-sle-etherpad-status
+    "S314",          # accepted: OBS/IBS metadata is trusted, defusedxml buys nothing
+    "S405",          # accepted: same as S314
+    "S608",          # accepted: psql -c string in openqa-db_query_last_use_of_module
+    "S101",          # 001_F1 (assert in osc-list-all-unresolvables stub)
+    "F821",          # 001_F1 (undefined sql_query in the same stub)
     # Ratchet baseline, removed by the plan task named here
     "N806",          # 001_B3
-    "N812",          # accepted: selenium docs use the EC alias
     "ERA001",        # 001_B3
     "FIX002",        # 001_B3
     "TD002",         # 001_B3
@@ -142,20 +151,6 @@ ignore = [
     "D102",          # 001_B3
     "D103",          # 001_B3
     "D401",          # 001_B3
-    "PTH100",        # 001_B5
-    "PTH112",        # 001_B5
-    "PTH118",        # 001_B5
-    "PTH120",        # 001_B5
-    "PTH208",        # 001_B5
-    "S105",          # 001_B5
-    "S108",          # 001_B5
-    "S404",          # 001_B5
-    "S603",          # 001_B5
-    "S607",          # 001_B5
-    "PLW1514",       # 001_B5
-    "EM102",         # 001_B5
-    "TRY003",        # 001_B5
-    "PLR2004",       # 001_B5
     "C901",          # 001_B4
     "PLR0911",       # 001_B4
     "PLR0912",       # 001_B4
@@ -164,13 +159,6 @@ ignore = [
     "PLR0915",       # 001_B4
     "PLR0917",       # 001_B4
     "PLW0717",       # 001_B4
-    "TRY300",        # 001_B4
-    "S101",          # 001_F1 (assert in osc-list-all-unresolvables stub)
-    "F821",          # 001_F1 (undefined sql_query in the same stub)
-    "S602",          # 001_E4 (curl|grep|sed pipeline in suse-qa-sle-etherpad-status)
-    "S314",          # accepted: OBS/IBS metadata is trusted, defusedxml buys nothing
-    "S405",          # accepted: same as S314
-    "S608",          # accepted: psql -c string in openqa-db_query_last_use_of_module
 ]
 
 [tool.ruff.lint.mccabe]
@@ -192,11 +180,11 @@ max-complexity = 9
     "undocumented-public-function",
     "boolean-type-hint-positional-argument",
 ]
-"gitea-review-cleanup" = ["B008", "FBT001", "FBT002", "FBT003"]
+"gitea-review-cleanup" = ["B008", "FBT001", "FBT002", "FBT003", "S105"]  # S105: token file path, not a secret
 "osc-sync-deps" = ["B008"]
 "osc-sync-leap" = ["B008", "T201", "FBT001", "FBT002", "FBT003"]
 "osc-get-pr-status" = ["FBT001", "FBT003"]
-"bluelinktoken.py" = ["T201"]
+"bluelinktoken.py" = ["T201", "S105"]  # S105: OAuth client credentials published by the car makers
 "find_non_utf8.py" = ["T201"]
 "mac-to-ipv6" = ["T201"]
 "obs-pr-repair" = ["T201"]

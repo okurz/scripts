@@ -10,6 +10,8 @@ import typer
 
 app = typer.Typer(help="Monitor GitLab CI jobs for specific log patterns.", add_completion=False)
 
+HTTP_OK = 200
+
 
 async def check_gitlab_jobs(
     url: str,
@@ -41,7 +43,7 @@ async def check_gitlab_jobs(
                 }:
                     # 2. Fetch job trace (log)
                     trace_response = await client.get(f"/api/v4/projects/{project_id}/jobs/{job['id']}/trace")
-                    if trace_response.status_code == 200 and search_term in trace_response.text:
+                    if trace_response.status_code == HTTP_OK and search_term in trace_response.text:
                         typer.secho(
                             f"[*] Match found in job {job['id']}:",
                             fg=typer.colors.GREEN,

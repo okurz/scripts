@@ -7,6 +7,7 @@ import pytest
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "github-all-prs"
 loader = importlib.machinery.SourceFileLoader("github_all_prs", str(SCRIPT_PATH))
 spec = importlib.util.spec_from_loader(loader.name, loader)
+assert spec is not None
 sut = importlib.util.module_from_spec(spec)
 loader.exec_module(sut)
 

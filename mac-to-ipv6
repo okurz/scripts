@@ -3,7 +3,9 @@
 import os
 import sys
 
-mac = input("Enter mac of host: ") if len(sys.argv) < 2 else sys.argv[1]
+MIN_ARGV = 2
+
+mac = input("Enter mac of host: ") if len(sys.argv) < MIN_ARGV else sys.argv[1]
 prefix = os.environ["prefix"] or ""  # noqa: SIM112 - env var name is the user interface
 byte_strings = mac.split(":")
 fffe_inserted = [*byte_strings[:3], "ff", "fe", *byte_strings[3:]]

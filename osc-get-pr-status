@@ -10,10 +10,10 @@ def get_detailed_results(project: str, package: str) -> str:
     """Fetches detailed build results using 'osc results -v'."""
     try:
         result = subprocess.run(["osc", "results", "-v", project, package], capture_output=True, text=True, check=True)
-        return result.stdout
     except subprocess.CalledProcessError as e:
         typer.echo(f"Error running osc: {e.stderr}", err=True)
         return ""
+    return result.stdout
 
 
 def parse_unresolvables(output: str) -> list[str]:

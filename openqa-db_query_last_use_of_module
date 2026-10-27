@@ -15,6 +15,8 @@ import sys
 logging.basicConfig()
 log = logging.getLogger(sys.argv[0] if __name__ == "__main__" else __name__)
 
+MAX_VERBOSE = 4
+
 
 class CustomFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
     """Preserve multi-line __doc__ and provide default arguments in help strings."""
@@ -36,7 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--age", default="90 days", help="How far to look back in history")
     args = parser.parse_args()
     verbose_to_log = {0: logging.CRITICAL, 1: logging.ERROR, 2: logging.WARNING, 3: logging.INFO, 4: logging.DEBUG}
-    logging_level = logging.DEBUG if args.verbose > 4 else verbose_to_log[args.verbose]
+    logging_level = logging.DEBUG if args.verbose > MAX_VERBOSE else verbose_to_log[args.verbose]
     log.setLevel(logging_level)
     return args
 

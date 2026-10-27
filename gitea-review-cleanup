@@ -23,7 +23,12 @@ PAGE_SIZE = 100
 MAX_RETRIES = 5
 BASE_BACKOFF_S = 2.0
 REQUEST_TIMEOUT_S = 30.0
+HTTP_BAD_REQUEST = 400
+HTTP_NOT_FOUND = 404
+HTTP_GONE = 410
+MAX_ERROR_BODY = 140
 THROTTLE_STATUSES = frozenset({403, 429, 502, 503})
+SKIPPABLE_STATUSES = frozenset({HTTP_NOT_FOUND, HTTP_GONE})
 
 
 class APIError(Exception):
@@ -57,7 +62,7 @@ def load_token(path: Path) -> str:
     if not path.is_file():
         typer.echo(f"error: token file not found: {path}", err=True)
         raise typer.Exit(code=2)
-    token = path.read_text().strip()
+    token = path.read_text(encoding="utf-8").strip()
     if not token:
         typer.echo(f"error: token file is empty: {path}", err=True)
         raise typer.Exit(code=2)
@@ -83,12 +88,14 @@ def request(
         response = client.request(method, path, json=body)
         if is_throttled(response):
             continue
-        if response.status_code in {404, 410}:
+        if response.status_code in SKIPPABLE_STATUSES:
             return response.status_code, None
-        if response.status_code >= 400:
-            raise APIError(f"{method} {path} -> {response.status_code}: {response.text[:140]}")
+        if response.status_code >= HTTP_BAD_REQUEST:
+            msg = f"{method} {path} -> {response.status_code}: {response.text[:MAX_ERROR_BODY]}"
+            raise APIError(msg)
         return response.status_code, response.json() if response.content else None
-    raise APIError(f"{method} {path}: still throttled after {MAX_RETRIES} attempts")
+    msg = f"{method} {path}: still throttled after {MAX_RETRIES} attempts"
+    raise APIError(msg)
 
 
 def item_to_match(item: dict[str, Any]) -> PullMatch:
@@ -132,7 +139,8 @@ def main(
 ) -> None:
     selector = SELECTORS.get(select)
     if selector is None:
-        raise typer.BadParameter(f"--select must be one of: {', '.join(SELECTORS)}")
+        msg = f"--select must be one of: {', '.join(SELECTORS)}"
+    raise typer.BadParameter(msg)
     token = load_token(token_file.expanduser())
 
     with httpx.Client(
@@ -165,10 +173,10 @@ def main(
                     f"/api/v1/repos/{match.repo}/pulls/{match.number}/requested_reviewers",
                     body={"reviewers": [login]},
                 )
-                status_label = "skip" if status in {404, 410} else "unassigned"
+                status_label = "skip" if status in SKIPPABLE_STATUSES else "unassigned"
                 typer.echo(f"{status_label} {match.label}")
-                skipped += status in {404, 410}
-                unassigned += status not in {404, 410}
+                skipped += status in SKIPPABLE_STATUSES
+                unassigned += status not in SKIPPABLE_STATUSES
             except APIError as err:
                 failed.append(f"{match.label}: {err}")
                 typer.echo(f"FAILED {err}", err=True)

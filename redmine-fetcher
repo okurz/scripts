@@ -6,6 +6,7 @@ from pathlib import Path
 import requests
 
 REQUEST_TIMEOUT = 30
+MIN_ARGV = 2
 
 
 def load_config() -> tuple[str | None, str | None]:
@@ -64,7 +65,7 @@ def fetch_ticket(ticket_id: str) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
+    if len(sys.argv) < MIN_ARGV:
         print("Usage: python redmine_fetcher.py <ticket_id>")
         sys.exit(1)
 

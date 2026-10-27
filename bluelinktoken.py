@@ -21,6 +21,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+HTTP_OK = 200
+
 
 def main() -> None:
     """Determine brand to get the refresh token for."""
@@ -126,7 +128,7 @@ def main() -> None:
         }
         session = requests.Session()
         response = session.post(TOKEN_URL, data=data)
-        if response.status_code == 200:
+        if response.status_code == HTTP_OK:
             tokens = response.json()
             if tokens is not None:
                 refresh_token = tokens["refresh_token"]

@@ -2,12 +2,13 @@
 
 import importlib.machinery
 import importlib.util
-import os.path
+from pathlib import Path
 
-rootpath = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+rootpath = str(Path(__file__).resolve().parent.parent)
 
-loader = importlib.machinery.SourceFileLoader("sut", rootpath + "/osc-list-all-unresolvables")
+loader = importlib.machinery.SourceFileLoader("sut", str(Path(rootpath) / "osc-list-all-unresolvables"))
 spec = importlib.util.spec_from_loader(loader.name, loader)
+assert spec is not None
 sut = importlib.util.module_from_spec(spec)
 loader.exec_module(sut)
 
