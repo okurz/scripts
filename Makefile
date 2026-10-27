@@ -17,7 +17,7 @@ PY_SCRIPTS ?= gitea-review-cleanup github-all-prs mac-to-ipv6 obs-pr-repair \
 	osc-sync-deps osc-sync-leap redmine-fetcher suse-qa-sle-etherpad-status
 PY_ALL = $(PY_FILES) $(PY_SCRIPTS)
 
-SHELL_SCRIPTS ?= git-rebase-all-branches git-review git-review-branch git-upstream-base hosts-yaml-to-aaaa
+SHELL_SCRIPTS ?= git-rebase-all-branches git-review git-review-branch git-upstream-base hosts-yaml-to-aaaa vimeo-review-dl
 
 .PHONY: help
 help: ## Display this help

@@ -77,7 +77,8 @@ print(cdn['url'], cfg['video']['title'], cfg['video'].get('duration'), sep='\t')
 PY
 )
 
-name=$(echo "$title" | sed 's,[/ ],_,g')
+name=${title//\//_}
+name=${name// /_}
 printf 'title=%s duration=%ss manifest host=%s\n' "$title" "$duration" "${manifest#*//}"
 
 if [[ ${LIST:-0} == 1 ]]; then
