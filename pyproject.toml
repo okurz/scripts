@@ -126,7 +126,6 @@ ignore = [
     "multi-line-summary-second-line",
     "missing-trailing-comma",  # accepted: COM812 fights ruff format
     # Ratchet baseline, removed by the plan task named here
-    "T201",          # 001_B7: print is the product of these CLI scripts
     "FBT001",        # 001_B7: typer CLI parameters are keyword-only by construction
     "FBT002",        # 001_B7
     "FBT003",        # 001_B7
@@ -201,7 +200,12 @@ max-complexity = 9
 ]
 "gitea-review-cleanup" = ["B008"]
 "osc-sync-deps" = ["B008"]
-"osc-sync-leap" = ["B008"]
+"osc-sync-leap" = ["B008", "T201"]
+"bluelinktoken.py" = ["T201"]
+"find_non_utf8.py" = ["T201"]
+"mac-to-ipv6" = ["T201"]
+"obs-pr-repair" = ["T201"]
+"redmine-fetcher" = ["T201"]
 
 [tool.ruff.format]
 docstring-code-format = true
