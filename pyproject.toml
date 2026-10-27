@@ -132,8 +132,6 @@ ignore = [
     "FBT003",        # 001_B7
     "N806",          # 001_B3
     "N812",          # accepted: selenium docs use the EC alias
-    "A002",          # 001_B2 (find_non_utf8 rewrite)
-    "D205",          # 001_B2 (find_non_utf8 rewrite)
     "ERA001",        # 001_B3
     "FIX002",        # 001_B3
     "TD002",         # 001_B3

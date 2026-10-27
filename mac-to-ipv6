@@ -4,7 +4,7 @@ import os
 import sys
 
 mac = input("Enter mac of host: ") if len(sys.argv) < 2 else sys.argv[1]
-prefix = os.environ["prefix"] if os.environ["prefix"] else ""  # noqa: SIM112 - env var name is the user interface
+prefix = os.environ["prefix"] or ""  # noqa: SIM112 - env var name is the user interface
 byte_strings = mac.split(":")
 fffe_inserted = [*byte_strings[:3], "ff", "fe", *byte_strings[3:]]
 flipped_bit = hex(int(fffe_inserted[0], 16) ^ 0b00000010)
