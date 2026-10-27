@@ -8,7 +8,7 @@ import requests
 REQUEST_TIMEOUT = 30
 
 
-def load_config():
+def load_config() -> tuple[str | None, str | None]:
     config_path = Path.home() / ".query_redminerc"
     if config_path.exists():
         config = {}
@@ -24,7 +24,7 @@ DEFAULT_HOST = "progress.opensuse.org"
 CONFIG_HOST, CONFIG_TOKEN = load_config()
 
 
-def fetch_ticket(ticket_id):
+def fetch_ticket(ticket_id: str) -> None:
     host = os.environ.get("REDMINE_HOST", CONFIG_HOST) or DEFAULT_HOST
     token = os.environ.get("REDMINE_API_TOKEN", CONFIG_TOKEN)
 

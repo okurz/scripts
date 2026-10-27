@@ -52,7 +52,7 @@ def run_interactive(work, keys):
     )
 
 
-def git(work, *args):
+def git(work: str, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *COMMIT_CONFIG, *list(args)],
         cwd=str(work),

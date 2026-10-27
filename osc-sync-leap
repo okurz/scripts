@@ -8,7 +8,7 @@ import typer
 app = typer.Typer()
 
 
-def run_command(cmd: list[str], *, dry_run: bool = False, capture_output: bool = False):
+def run_command(cmd: list[str], *, dry_run: bool = False, capture_output: bool = False) -> str:
     if dry_run:
         if capture_output:
             if "rev-parse" in cmd:
@@ -35,7 +35,7 @@ def sync(
     remote: str = typer.Option("okurz", "--remote", "-r", help="Your fork remote name"),
     upstream: str = typer.Option("origin", "--upstream", "-u", help="Upstream remote name"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show commands without executing them"),
-):
+) -> None:
     """Sync Leap branches from Factory for ANY openSUSE package using the git-workflow."""
     # 0. Get package name from repository root directory name
     repo_root = run_command(["git", "rev-parse", "--show-toplevel"], capture_output=True, dry_run=dry_run)

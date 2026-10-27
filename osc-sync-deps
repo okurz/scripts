@@ -7,7 +7,7 @@ import typer
 app = typer.Typer(help="Parse unresolvable dependencies and suggest source packages to sync.")
 
 
-def get_source_pkg(binary_pkg: str):
+def get_source_pkg(binary_pkg: str) -> str:
     """Maps a binary package name (e.g., python313-foo) to a likely source package name (e.g., python-foo)."""
     # Strip potential trailing parenthesis or other chars
     binary_pkg = binary_pkg.strip("()")
@@ -28,7 +28,7 @@ def suggest(
     input_file: typer.FileText | None = typer.Argument(
         None, help="File containing 'nothing provides' lines. If omitted, reads from stdin."
     ),
-):
+) -> None:
     """Suggest source packages to sync from Factory based on unresolvable binary packages."""
     if input_file:
         input_text = input_file.read()

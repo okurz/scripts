@@ -90,7 +90,7 @@ def needs_work_filter(pr: dict, me: str) -> str | None:
     return None
 
 
-def list_needs_review(limit: int, workers: int):
+def list_needs_review(limit: int, workers: int) -> None:
     """Core logic for needs-review."""
     me = get_me()
     query = (
@@ -107,7 +107,7 @@ def list_needs_review(limit: int, workers: int):
         typer.echo(output)
 
 
-def list_needs_work(limit: int, workers: int):
+def list_needs_work(limit: int, workers: int) -> None:
     """Core logic for needs-work."""
     me = get_me()
     query = f"search prs --author @me --state open --sort updated --limit {limit} --json url,title,isDraft"
@@ -126,7 +126,7 @@ def list_needs_work(limit: int, workers: int):
 def needs_review(
     limit: int = typer.Option(100, help="Maximum number of PRs to search."),
     workers: int = typer.Option(10, help="Number of parallel workers for status checks."),
-):
+) -> None:
     """Fetch and display open PRs by current user that are ready for review (CI success, no changes requested)."""
     list_needs_review(limit, workers)
 
@@ -135,13 +135,13 @@ def needs_review(
 def needs_work(
     limit: int = typer.Option(100, help="Maximum number of PRs to search."),
     workers: int = typer.Option(10, help="Number of parallel workers for status checks."),
-):
+) -> None:
     """Fetch and display open PRs by current user that need work (CI failure or unanswered changes requested)."""
     list_needs_work(limit, workers)
 
 
 @app.callback(invoke_without_command=True)
-def main(ctx: typer.Context):
+def main(ctx: typer.Context) -> None:
     """Default to needs-review if no command provided."""
     if ctx.invoked_subcommand is None:
         list_needs_review(100, 10)

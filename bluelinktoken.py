@@ -22,7 +22,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 
-def main():
+def main() -> None:
     """Determine brand to get the refresh token for."""
     parser = argparse.ArgumentParser()
     parser.add_argument(

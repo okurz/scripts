@@ -25,7 +25,7 @@ class CustomFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescri
     """Preserve multi-line __doc__ and provide default arguments in help strings."""
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=CustomFormatter)
     parser.add_argument(
         "-v",
@@ -50,12 +50,12 @@ def parse_args():
     return args
 
 
-def call(cmds, *, dry_run=False):
+def call(cmds: str, *, dry_run: bool = False) -> int:
     log.debug("call: %s", cmds)
     return subprocess.call(("echo Simulating: " if dry_run else "") + cmds, shell=True)
 
 
-def main():
+def main() -> None:
     args = parse_args()
     url = urllib.parse.urljoin(args.etherpad_url, "export/markdown")
     cmd = "curl -s " + url + r" | grep -B 3 -P 'Status.*(RED|AMBER|GREEN)' | sed -n -e 's/\s*Status:\s*//p' -e '/^#/p'"
@@ -70,7 +70,7 @@ def main():
     }
     rx = re.compile("|".join(map(re.escape, status_replace)))
 
-    def one_match(m):
+    def one_match(m: re.Match[str]) -> str:
         return "**Status: " + status_replace[m.group(0)] + "**"
 
     report_str = rx.sub(one_match, report_str)
