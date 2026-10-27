@@ -1,3 +1,5 @@
+"""Tests for obs-pr-repair: workflow parsing, repository checks and the repair actions."""
+
 import importlib.machinery
 import importlib.util
 import json

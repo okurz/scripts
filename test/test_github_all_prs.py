@@ -1,3 +1,5 @@
+"""Tests for github-all-prs: date parsing and the review-request filters."""
+
 import importlib.machinery
 import importlib.util
 from pathlib import Path

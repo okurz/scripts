@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Fetch a Redmine ticket with its journals and print it as markdown."""
+
 import os
 import sys
 from pathlib import Path
@@ -10,6 +12,7 @@ MIN_ARGV = 2
 
 
 def load_config() -> tuple[str | None, str | None]:
+    """Return (redmine-host, redmine-token) from ~/.query_redminerc, or (None, None) if absent."""
     config_path = Path.home() / ".query_redminerc"
     if config_path.exists():
         config = {}
@@ -26,6 +29,7 @@ CONFIG_HOST, CONFIG_TOKEN = load_config()
 
 
 def fetch_ticket(ticket_id: str) -> None:
+    """Fetch a Redmine issue with its journals and print it, exiting 1 on request errors."""
     host = os.environ.get("REDMINE_HOST", CONFIG_HOST) or DEFAULT_HOST
     token = os.environ.get("REDMINE_API_TOKEN", CONFIG_TOKEN)
 

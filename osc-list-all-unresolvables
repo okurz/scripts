@@ -26,6 +26,7 @@ class CustomFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescri
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments and set the log level from --verbose."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=CustomFormatter)
     parser.add_argument(
         "-v",
@@ -48,51 +49,25 @@ def parse_args() -> argparse.Namespace:
 
 
 def call(cmds: list[str], *, dry_run: bool = False) -> int:
+    """Run cmds, or echo them as simulated when dry_run is set."""
     log.debug("call: %s", cmds)
     return subprocess.call((["echo", "Simulating: "] if dry_run else []) + cmds)
 
 
 def default_repo(prj: str) -> None:
+    """Run osc meta for the project, the repository lookup is still to be implemented."""
     meta = call(["osc", "meta", "prj", prj])
     assert meta
-    # xml_grep --nowrap repository "$prj" | sed -n "s/^.*name=\"\([^\"]*\).*$/\1/p")
 
 
 def list_unresolvables() -> None:
-    pass
+    """Stub: the unresolvable listing is not implemented yet."""
 
 
 def main() -> None:
+    """Run the query for the given project, the openQA query is still to be implemented."""
     args = parse_args()
     call(
         ["ssh", args.openqa_host, f'sudo -u geekotest psql -t --command="{sql_query}" openqa'],
         dry_run=args.dry_run,
     )
-
-
-# def list_unresolvables_for_pkg():
-# prj="${1?"Need project"}"
-# pkg="${2?"Need package"}"
-# repo="${3?"Need repo"}"
-# arch="${4:-"x86_64"}"
-
-# osc buildinfo "$prj" os-autoinst 16.0 x86_64 | xml_grep error --text_only | sed -n "s/^.*provides //p"
-# }
-
-# main() {
-# prj="${1?"Need project"}"
-# osc="${osc:-"$(command -v osc)"}"
-# pkg="${2:-""}"
-# repo="${3:-""}"
-# arch="${arch:-"x86_64"}"
-# if [[ -n $repo ]]; then
-# if [[ -n $pkg ]]; then
-# list_unresolvables_for_pkg "$prj" "$pkg" "$repo" "$arch"
-##else
-##while read pkg <<<$(osc list $prj); do
-###list_unresolvables_for_pkg $pkg
-##done
-# fi
-# }
-
-# main "$@"

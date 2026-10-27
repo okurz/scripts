@@ -1,3 +1,5 @@
+"""Shared fixtures: load repository scripts that have no .py suffix as modules."""
+
 import importlib.machinery
 import importlib.util
 import sys

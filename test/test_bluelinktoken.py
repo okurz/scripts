@@ -1,3 +1,5 @@
+"""Tests for the pure helpers of bluelinktoken: code extraction, redirect matching and CLI brand parsing."""
+
 import pytest
 
 CODE = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.cccccccc-cccc-cccc-cccc-cccccccccccc"

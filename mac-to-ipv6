@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Derive the IPv6 link-local address from a MAC address (EUI-64)."""
+
 # https://progress.opensuse.org/issues/155824#note-20
 import os
 import sys

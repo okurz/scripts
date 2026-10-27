@@ -29,6 +29,8 @@ BASE_URL = "https://idpconnect-eu.{brand}.com/auth/api/v2/user/oauth2/"
 
 
 class BrandConfig(TypedDict):
+    """OAuth client settings and login URLs for one car brand."""
+
     client_id: str
     client_secret: str
     redirect_url_final: str

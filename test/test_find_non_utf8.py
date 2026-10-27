@@ -1,3 +1,5 @@
+"""Tests for find_non_utf8: UTF-8 name validation and the directory walk."""
+
 import io
 import os
 import subprocess

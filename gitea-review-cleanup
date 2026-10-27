@@ -32,11 +32,13 @@ SKIPPABLE_STATUSES = frozenset({HTTP_NOT_FOUND, HTTP_GONE})
 
 
 class APIError(Exception):
-    pass
+    """Raised when the Gitea API returns an error or stays throttled."""
 
 
 @dataclass(frozen=True)
 class PullMatch:
+    """A review-requested pull request found through the Gitea issue search."""
+
     repo: str
     number: int
     title: str
@@ -44,10 +46,12 @@ class PullMatch:
 
     @property
     def label(self) -> str:
+        """The repo!number reference used in log lines."""
         return f"{self.repo}!{self.number}"
 
 
 def is_forwarded(match: PullMatch) -> bool:
+    """Return whether the pull request title marks it as a forwarded-PR batch."""
     return match.title.startswith("Forwarded PRs:")
 
 
@@ -59,6 +63,7 @@ SELECTORS: dict[str, Callable[[PullMatch], bool]] = {
 
 
 def load_token(path: Path) -> str:
+    """Read the API token from a file, exiting with a message when missing or empty."""
     if not path.is_file():
         typer.echo(f"error: token file not found: {path}", err=True)
         raise typer.Exit(code=2)
@@ -70,6 +75,7 @@ def load_token(path: Path) -> str:
 
 
 def is_throttled(response: httpx.Response) -> bool:
+    """Return whether the response is a throttle status or a non-JSON reply to retry."""
     if response.status_code in THROTTLE_STATUSES:
         return True
     return "application/json" not in response.headers.get("content-type", "")
@@ -99,6 +105,7 @@ def request(
 
 
 def item_to_match(item: dict[str, Any]) -> PullMatch:
+    """Convert one Gitea issue-search item into a PullMatch."""
     return PullMatch(
         repo=item["repository"]["full_name"],
         number=item["number"],
@@ -108,6 +115,7 @@ def item_to_match(item: dict[str, Any]) -> PullMatch:
 
 
 def search_review_requested(client: httpx.Client) -> list[PullMatch]:
+    """Collect every pull request that requested review, following pagination."""
     matches: list[PullMatch] = []
     page = 1
     while True:
@@ -137,6 +145,7 @@ def main(
     limit: int = typer.Option(0, "--limit", help="Safety cap on the number of PRs to process (0 = no cap)."),
     request_delay: float = typer.Option(0.1, "--request-delay", help="Delay in seconds between unassign requests."),
 ) -> None:
+    """Unassign review requests from draft or forwarded pull requests on Gitea."""
     selector = SELECTORS.get(select)
     if selector is None:
         msg = f"--select must be one of: {', '.join(SELECTORS)}"

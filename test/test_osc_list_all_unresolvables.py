@@ -13,14 +13,6 @@ sut = importlib.util.module_from_spec(spec)
 loader.exec_module(sut)
 
 
-# def args_factory():
-# args = Namespace()
-# args.dry_run = False
-# args.verbose = 1
-# args.priority_add = 100
-# return args
-
-
 def test_default_repo():
     assert sut.default_repo("home:okurz:try_openqa_leap16") == "16.0"
 
