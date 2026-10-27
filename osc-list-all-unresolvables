@@ -45,7 +45,7 @@ def parse_args():
     return args
 
 
-def call(cmds, dry_run=False):
+def call(cmds, *, dry_run=False):
     log.debug("call: %s", cmds)
     return subprocess.call((["echo", "Simulating: "] if dry_run else []) + cmds)
 
@@ -64,7 +64,7 @@ def main():
     args = parse_args()
     call(
         ["ssh", args.openqa_host, f'sudo -u geekotest psql -t --command="{sql_query}" openqa'],
-        args.dry_run,
+        dry_run=args.dry_run,
     )
 
 

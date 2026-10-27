@@ -126,9 +126,6 @@ ignore = [
     "multi-line-summary-second-line",
     "missing-trailing-comma",  # accepted: COM812 fights ruff format
     # Ratchet baseline, removed by the plan task named here
-    "FBT001",        # 001_B7: typer CLI parameters are keyword-only by construction
-    "FBT002",        # 001_B7
-    "FBT003",        # 001_B7
     "N806",          # 001_B3
     "N812",          # accepted: selenium docs use the EC alias
     "ERA001",        # 001_B3
@@ -197,10 +194,12 @@ max-complexity = 9
     "too-many-arguments",
     "too-many-positional-arguments",
     "undocumented-public-function",
+    "boolean-type-hint-positional-argument",
 ]
-"gitea-review-cleanup" = ["B008"]
+"gitea-review-cleanup" = ["B008", "FBT001", "FBT002", "FBT003"]
 "osc-sync-deps" = ["B008"]
-"osc-sync-leap" = ["B008", "T201"]
+"osc-sync-leap" = ["B008", "T201", "FBT001", "FBT002", "FBT003"]
+"osc-get-pr-status" = ["FBT001", "FBT003"]
 "bluelinktoken.py" = ["T201"]
 "find_non_utf8.py" = ["T201"]
 "mac-to-ipv6" = ["T201"]

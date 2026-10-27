@@ -574,6 +574,7 @@ def repair_after_cycle(
 
 def recreate_project(
     context: ProjectContext,
+    *,
     auto_confirm: bool = False,
     runner: CommandRunner = default_runner,
 ) -> bool:

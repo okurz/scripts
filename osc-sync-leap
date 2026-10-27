@@ -8,7 +8,7 @@ import typer
 app = typer.Typer()
 
 
-def run_command(cmd: list[str], dry_run: bool = False, capture_output: bool = False):
+def run_command(cmd: list[str], *, dry_run: bool = False, capture_output: bool = False):
     if dry_run:
         if capture_output:
             if "rev-parse" in cmd:
