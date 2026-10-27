@@ -136,7 +136,6 @@ ignore = [
     "S101",          # 001_F1 (assert in osc-list-all-unresolvables stub)
     "F821",          # 001_F1 (undefined sql_query in the same stub)
     # Ratchet baseline, removed by the plan task named here
-    "N806",          # 001_B3
     "ERA001",        # 001_B3
     "FIX002",        # 001_B3
     "TD002",         # 001_B3
