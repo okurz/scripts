@@ -10,18 +10,27 @@ import typer
 app = typer.Typer()
 
 
+DRY_RUN_OUTPUT = {
+    "rev-parse": "dryrunhash",
+    "remote": "gitea@src.opensuse.org:pool/generic-package.git",
+    "ls-tree": "file1\nfile2",
+}
+
+
+def canned_output(cmd: list[str]) -> str | None:
+    """Return the canned stdout the dry run substitutes for a git command, None when there is none."""
+    for key, output in DRY_RUN_OUTPUT.items():
+        if key in cmd:
+            return output
+    return None
+
+
 def run_command(cmd: list[str], *, dry_run: bool = False, capture_output: bool = False) -> str:
     """Run cmd, or print it and return canned output when dry_run is set."""
     if dry_run:
-        if capture_output:
-            if "rev-parse" in cmd:
-                return "dryrunhash"
-            if "remote" in cmd:
-                return "gitea@src.opensuse.org:pool/generic-package.git"
-            if "ls-tree" in cmd:
-                return "file1\nfile2"
-            if "rev-parse" in cmd and "--show-toplevel" in cmd:
-                return str(pathlib.Path.cwd())
+        canned = canned_output(cmd) if capture_output else None
+        if canned is not None:
+            return canned
         print(f"[DRY-RUN] {' '.join(cmd)}")
         return ""
 

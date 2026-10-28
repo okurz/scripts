@@ -800,6 +800,21 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def run_action(context: ProjectContext, args: argparse.Namespace) -> int:
+    """Run the single requested action, or diagnose and print the report when none is given."""
+    if args.recreate:
+        return 0 if recreate_project(context, auto_confirm=args.yes) else 1
+    if args.configure_repos:
+        return 0 if configure_repositories(context) else 1
+    if args.repair_branch:
+        return 0 if repair_branch(context) else 1
+    if args.rebuild:
+        return 0 if rebuild_project(context) else 1
+    report = diagnose(context)
+    print(format_report(report, context))
+    return 0 if report.status == HealthStatus.HEALTHY else 2
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint."""
     parser = create_parser()
@@ -827,25 +842,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
-    if args.recreate:
-        success = recreate_project(context, auto_confirm=args.yes)
-        return 0 if success else 1
-
-    if args.configure_repos:
-        success = configure_repositories(context)
-        return 0 if success else 1
-
-    if args.repair_branch:
-        success = repair_branch(context)
-        return 0 if success else 1
-
-    if args.rebuild:
-        success = rebuild_project(context)
-        return 0 if success else 1
-
-    report = diagnose(context)
-    print(format_report(report, context))
-    return 0 if report.status == HealthStatus.HEALTHY else 2
+    return run_action(context, args)
 
 
 if __name__ == "__main__":

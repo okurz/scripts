@@ -83,39 +83,67 @@ def openqa_context(pr_number: int = 7985) -> sut.ProjectContext:
     )
 
 
+MISSING_PRJ_STDERR = "Server returned an error: HTTP Error 404: Not Found"
+
+
+def osc_meta_response(_cmd: Sequence[str], state: dict) -> subprocess.CompletedProcess[str]:
+    """Return the stored project meta, or the OBS 404 when the project is missing."""
+    if state.get("project_missing"):
+        return make_completed_process(returncode=1, stderr=MISSING_PRJ_STDERR)
+    return make_completed_process(stdout=state["meta"])
+
+
+def osc_ls_response(cmd: Sequence[str], state: dict) -> subprocess.CompletedProcess[str]:
+    """Return the canned package listing for a project query, the tracked files for a package query."""
+    return make_completed_process(stdout=state["files"] if len(cmd) == 4 else "openQA\n")
+
+
+def osc_branch_response(_cmd: Sequence[str], state: dict) -> subprocess.CompletedProcess[str]:
+    """Mark the package as non-empty and return the branch result driven by branch_code."""
+    state["files"] = "_service\nopenQA.spec\n"
+    return make_completed_process(returncode=state.get("branch_code", 0))
+
+
+def osc_api_response(cmd: Sequence[str], state: dict) -> subprocess.CompletedProcess[str]:
+    """Record the submitted prj meta file, return OK for the PUT and a success for other calls."""
+    if cmd[-1].endswith("_meta"):
+        state["meta"] = Path(cmd[5]).read_text(encoding="utf-8")
+        return make_completed_process(stdout="OK")
+    return make_completed_process(returncode=0)
+
+
+def osc_results_response(cmd: Sequence[str], state: dict) -> subprocess.CompletedProcess[str]:
+    """Return the stored results XML for an --xml query, the plain one-line table otherwise."""
+    return make_completed_process(stdout=state["results_xml"] if "--xml" in cmd else "openQA  x  TW x86_64\n")
+
+
+def gh_view_response() -> subprocess.CompletedProcess[str]:
+    """Return the canned head ref of okurz/openQA for a gh pr view query."""
+    payload = {"headRefOid": "abc12345def", "headRepository": {"nameWithOwner": "okurz/openQA"}}
+    return make_completed_process(stdout=json.dumps(payload))
+
+
+OSC_HANDLERS = {
+    ("meta", "prj"): osc_meta_response,
+    "ls": osc_ls_response,
+    "branch": osc_branch_response,
+    "api": osc_api_response,
+    "results": osc_results_response,
+}
+
+
 def make_state_runner(
     state: dict, calls: list[list[str]]
 ) -> Callable[[Sequence[str]], subprocess.CompletedProcess[str]]:
+    """Return a runner that records every command and answers it from the shared state."""
+
     def fake_runner(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
         calls.append(list(cmd))
-        if cmd[1:3] == ["meta", "prj"]:
-            if state.get("project_missing"):
-                return make_completed_process(
-                    returncode=1,
-                    stderr="Server returned an error: HTTP Error 404: Not Found",
-                )
-            return make_completed_process(stdout=state["meta"])
-        if cmd[1] == "ls" and len(cmd) == 3:
-            return make_completed_process(stdout="openQA\n")
-        if cmd[1] == "ls" and len(cmd) == 4:
-            return make_completed_process(stdout=state["files"])
-        if cmd[1] == "branch":
-            state["files"] = "_service\nopenQA.spec\n"
-            return make_completed_process(returncode=state.get("branch_code", 0))
-        if cmd[1] == "api" and cmd[-1].endswith("_meta"):
-            state["meta"] = Path(cmd[5]).read_text(encoding="utf-8")
-            return make_completed_process(stdout="OK")
         if cmd[0] == "gh" and cmd[1:3] == ["pr", "view"]:
-            payload = {
-                "headRefOid": "abc12345def",
-                "headRepository": {"nameWithOwner": "okurz/openQA"},
-            }
-            return make_completed_process(stdout=json.dumps(payload))
-        if cmd[1] == "results" and "--xml" in cmd:
-            return make_completed_process(stdout=state["results_xml"])
-        if cmd[1] == "results":
-            return make_completed_process(stdout="openQA  x  TW x86_64\n")
-        return make_completed_process(returncode=0)
+            return gh_view_response()
+        key = tuple(cmd[1:3]) if cmd[1] == "meta" else cmd[1]
+        handler = OSC_HANDLERS.get(key)
+        return handler(cmd, state) if handler else make_completed_process(returncode=0)
 
     return fake_runner
 
@@ -363,7 +391,7 @@ def test_verify_prerequisites_all_passing() -> None:
 
 
 @pytest.mark.parametrize(
-    ("desc", "which_side_effect", "cmd_failure", "expected_error"),
+    ("_desc", "which_side_effect", "cmd_failure", "expected_error"),
     [
         (
             "missing osc executable raises RuntimeError",
@@ -386,10 +414,10 @@ def test_verify_prerequisites_all_passing() -> None:
     ],
 )
 def test_verify_prerequisites_failures(
-    desc: str, which_side_effect: object, cmd_failure: str | None, expected_error: str
+    _desc: str, which_side_effect: object, cmd_failure: str | None, expected_error: str
 ) -> None:
-    def fake_runner(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
-        if cmd_failure and cmd[0] == cmd_failure:
+    def fake_runner(_cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        if cmd_failure and _cmd[0] == cmd_failure:
             return make_completed_process(returncode=1, stderr="Authentication error")
         return make_completed_process(returncode=0)
 
@@ -751,7 +779,7 @@ def test_repair_after_cycle_project_not_recreated() -> None:
     ctx = openqa_context()
     sleeps: list[float] = []
 
-    def fake_runner(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    def fake_runner(_cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
         return make_completed_process(returncode=1, stderr="HTTP Error 404: Not Found")
 
     ok = sut.repair_after_cycle(
@@ -773,7 +801,7 @@ def test_repair_after_cycle_configures_missing_build_targets() -> None:
         "results_xml": HEALTHY_RESULTS_XML,
     }
     calls: list[list[str]] = []
-    ok = sut.repair_after_cycle(ctx, runner=make_state_runner(state, calls), sleep=lambda s: None)
+    ok = sut.repair_after_cycle(ctx, runner=make_state_runner(state, calls), sleep=lambda _s: None)
     assert ok is True
     assert '<repository name="16.0">' in state["meta"]
     assert not any(cmd[1] == "branch" for cmd in calls)
@@ -783,7 +811,7 @@ def test_repair_after_cycle_rebranches_empty_package() -> None:
     ctx = openqa_context()
     state = {"meta": FULL_PRJ_META, "files": "", "results_xml": HEALTHY_RESULTS_XML}
     calls: list[list[str]] = []
-    ok = sut.repair_after_cycle(ctx, runner=make_state_runner(state, calls), sleep=lambda s: None)
+    ok = sut.repair_after_cycle(ctx, runner=make_state_runner(state, calls), sleep=lambda _s: None)
     assert ok is True
     branches = [cmd for cmd in calls if cmd[1] == "branch"]
     assert branches == [["osc", "branch", "-f", "devel:openQA", "openQA", ctx.obs_project, "openQA"]]
@@ -799,7 +827,7 @@ def test_repair_after_cycle_branch_failure() -> None:
         "branch_code": 1,
     }
     calls: list[list[str]] = []
-    assert sut.repair_after_cycle(ctx, runner=make_state_runner(state, calls), sleep=lambda s: None) is False
+    assert sut.repair_after_cycle(ctx, runner=make_state_runner(state, calls), sleep=lambda _s: None) is False
 
 
 def test_recreate_project_abort_on_prompt() -> None:
@@ -922,7 +950,7 @@ def test_find_and_parse_workflow_file(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("desc", "args_list", "expected_err"),
+    ("_desc", "args_list", "expected_err"),
     [
         (
             "invalid repository format raises ValueError",
@@ -941,7 +969,7 @@ def test_find_and_parse_workflow_file(tmp_path: Path) -> None:
         ),
     ],
 )
-def test_resolve_context_validation_errors(desc: str, args_list: list[str], expected_err: str) -> None:
+def test_resolve_context_validation_errors(_desc: str, args_list: list[str], expected_err: str) -> None:
     parser = sut.create_parser()
     args = parser.parse_args(args_list)
     with pytest.raises(ValueError, match=expected_err):
@@ -1046,7 +1074,7 @@ def test_rebuild_project_failure() -> None:
     assert sut.rebuild_project(ctx, runner=runner) is False
 
 
-def test_main_dispatch_flows(tmp_path: Path) -> None:
+def test_main_dispatch_flows() -> None:
     base_args = [
         "--repo",
         "os-autoinst/openQA",

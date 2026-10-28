@@ -141,6 +141,19 @@ def exchange_code(cfg: BrandConfig, code: str, base_url: str) -> None:
         print(f"\n❌ Error getting tokens from the API!\n{response.text}")
 
 
+def print_login_instructions(login_url: str) -> None:
+    """Tell the user which login page the browser is opening."""
+    print(f"Opening login page: {login_url}")
+
+
+def print_login_wait_banner() -> None:
+    """Tell the user that the script waits for the manual login to finish."""
+    print("\n" + "=" * 50)
+    print("Please log in manually in the browser window.")
+    print("The script will wait for you to complete the login...")
+    print("=" * 50 + "\n")
+
+
 def main() -> None:
     """Run the Selenium login, follow the redirect and print the tokens."""
     args = parse_args()
@@ -150,31 +163,32 @@ def main() -> None:
 
     driver = configure_driver()
     try:
-        print(f"Opening login page: {cfg['login_url']}")
+        print_login_instructions(cfg["login_url"])
         driver.get(cfg["login_url"])
-        print("\n" + "=" * 50)
-        print("Please log in manually in the browser window.")
-        print("The script will wait for you to complete the login...")
-        print("=" * 50 + "\n")
+        print_login_wait_banner()
         run_login_flow(driver, cfg, base_url, redirect_url)
     finally:
         print("Cleaning up and closing the browser.")
         driver.quit()
 
 
+def complete_redirect(driver: webdriver.Chrome, cfg: BrandConfig, base_url: str, redirect_url: str) -> None:
+    """Follow the OAuth redirect, extract the code and exchange it for tokens."""
+    print("✅ Login successful! Element found.")
+    print(f"Redirecting to: {redirect_url}")
+    driver.get(redirect_url)
+    current_url = wait_for_redirect(driver, cfg["redirect_pattern"])
+    code = extract_code(current_url)
+    if code is None:
+        print(f"\n❌ No OAuth code in {current_url}")
+        return
+    exchange_code(cfg, code, base_url)
+
+
 def run_login_flow(driver: webdriver.Chrome, cfg: BrandConfig, base_url: str, redirect_url: str) -> None:
     """Wait for the manual login, follow the redirect and exchange the code."""
     try:
-        wait_for_login(driver, cfg)
-        print("✅ Login successful! Element found.")
-        print(f"Redirecting to: {redirect_url}")
-        driver.get(redirect_url)
-        current_url = wait_for_redirect(driver, cfg["redirect_pattern"])
-        code = extract_code(current_url)
-        if code is None:
-            print(f"\n❌ No OAuth code in {current_url}")
-            return
-        exchange_code(cfg, code, base_url)
+        complete_redirect(driver, cfg, base_url, redirect_url)
     except TimeoutException:
         print("❌ Timed out after 5 minutes. Login was not completed or the success element was not found.")
     except Exception as e:  # noqa: BLE001

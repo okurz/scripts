@@ -128,6 +128,63 @@ def search_review_requested(client: httpx.Client) -> list[PullMatch]:
         page += 1
 
 
+def print_dry_run(capped: list[PullMatch]) -> None:
+    """List every pull request that would be unassigned, changing nothing."""
+    for match in capped:
+        tags = [tag for tag, hit in (("draft", match.draft), ("forwarded", is_forwarded(match))) if hit]
+        typer.echo(f"would unassign {match.label} [{'+'.join(tags)}]")
+
+
+def unassign_review_requests(
+    client: httpx.Client, login: str, capped: list[PullMatch], request_delay: float
+) -> tuple[int, int, list[str]]:
+    """Drop my review request from each pull request, returning the counts and the failure labels."""
+    unassigned = skipped = 0
+    failed: list[str] = []
+    for match in capped:
+        try:
+            status, _ = request(
+                client,
+                "DELETE",
+                f"/api/v1/repos/{match.repo}/pulls/{match.number}/requested_reviewers",
+                body={"reviewers": [login]},
+            )
+            status_label = "skip" if status in SKIPPABLE_STATUSES else "unassigned"
+            typer.echo(f"{status_label} {match.label}")
+            skipped += status in SKIPPABLE_STATUSES
+            unassigned += status not in SKIPPABLE_STATUSES
+        except APIError as err:
+            failed.append(f"{match.label}: {err}")
+            typer.echo(f"FAILED {err}", err=True)
+        if request_delay:
+            time.sleep(request_delay)
+    return unassigned, skipped, failed
+
+
+def report_result(
+    client: httpx.Client,
+    selector: Callable[[PullMatch], bool],
+    capped: list[PullMatch],
+    result: tuple[int, int, list[str]],
+) -> None:
+    """Print the summary and the PRs that still request my review, exiting 1 when the run left work."""
+    unassigned, skipped, failed = result
+    capped_keys = {(m.repo, m.number) for m in capped}
+    remaining = [m for m in search_review_requested(client) if selector(m) and (m.repo, m.number) in capped_keys]
+    typer.echo(
+        f"done: unassigned={unassigned} skipped={skipped} failed={len(failed)}"
+        f" | still requesting my review: {len(remaining)}"
+    )
+    for match in remaining:
+        typer.echo(f"  remaining: {match.label}")
+    if failed:
+        typer.echo("failures:", err=True)
+        for msg in failed:
+            typer.echo(f"  {msg}", err=True)
+    if failed or remaining:
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def main(
     base_url: str = typer.Option(DEFAULT_BASE_URL, "--base-url", help="Gitea instance base URL."),
@@ -149,7 +206,7 @@ def main(
     selector = SELECTORS.get(select)
     if selector is None:
         msg = f"--select must be one of: {', '.join(SELECTORS)}"
-    raise typer.BadParameter(msg)
+        raise typer.BadParameter(msg)
     token = load_token(token_file.expanduser())
 
     with httpx.Client(
@@ -167,45 +224,11 @@ def main(
             f"review-requested open PRs matching: {len(matches)}" + (f" | capped to {len(capped)}" if limit else "")
         )
         if dry_run:
-            for match in capped:
-                tags = [tag for tag, hit in (("draft", match.draft), ("forwarded", is_forwarded(match))) if hit]
-                typer.echo(f"would unassign {match.label} [{'+'.join(tags)}]")
+            print_dry_run(capped)
             return
 
-        unassigned = skipped = 0
-        failed: list[str] = []
-        for match in capped:
-            try:
-                status, _ = request(
-                    client,
-                    "DELETE",
-                    f"/api/v1/repos/{match.repo}/pulls/{match.number}/requested_reviewers",
-                    body={"reviewers": [login]},
-                )
-                status_label = "skip" if status in SKIPPABLE_STATUSES else "unassigned"
-                typer.echo(f"{status_label} {match.label}")
-                skipped += status in SKIPPABLE_STATUSES
-                unassigned += status not in SKIPPABLE_STATUSES
-            except APIError as err:
-                failed.append(f"{match.label}: {err}")
-                typer.echo(f"FAILED {err}", err=True)
-            if request_delay:
-                time.sleep(request_delay)
-
-        capped_keys = {(m.repo, m.number) for m in capped}
-        remaining = [m for m in search_review_requested(client) if selector(m) and (m.repo, m.number) in capped_keys]
-        typer.echo(
-            f"done: unassigned={unassigned} skipped={skipped} failed={len(failed)}"
-            f" | still requesting my review: {len(remaining)}"
-        )
-        for match in remaining:
-            typer.echo(f"  remaining: {match.label}")
-        if failed:
-            typer.echo("failures:", err=True)
-            for msg in failed:
-                typer.echo(f"  {msg}", err=True)
-        if failed or remaining:
-            raise typer.Exit(code=1)
+        unassigned, skipped, failed = unassign_review_requests(client, login, capped, request_delay)
+        report_result(client, selector, capped, (unassigned, skipped, failed))
 
 
 if __name__ == "__main__":

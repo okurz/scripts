@@ -11,6 +11,40 @@ import typer
 app = typer.Typer(help="Monitor GitLab CI jobs for specific log patterns.", add_completion=False)
 
 HTTP_OK = 200
+FINISHED_STATUSES = frozenset({"success", "failed", "canceled"})
+
+
+def print_match(job: dict[str, str | int]) -> None:
+    """Print the job id, URL and status of a trace match."""
+    typer.secho(f"[*] Match found in job {job['id']}:", fg=typer.colors.GREEN)
+    typer.echo(f"    URL:    {job['web_url']}")
+    typer.echo(f"    Status: {job['status']}")
+
+
+async def fetch_jobs(client: httpx.AsyncClient, project_id: str) -> list[dict[str, str | int]]:
+    """Fetch the recent jobs of a project through the GitLab API."""
+    response = await client.get(f"/api/v4/projects/{project_id}/jobs")
+    response.raise_for_status()
+    return response.json()
+
+
+async def scan_jobs(
+    client: httpx.AsyncClient,
+    project_id: str,
+    jobs: list[dict[str, str | int]],
+    job_name: str,
+    search_term: str,
+) -> bool:
+    """Search the trace of every finished job with the requested name, return whether any matched."""
+    found = False
+    for job in jobs:
+        if job["name"] != job_name or job["status"] not in FINISHED_STATUSES:
+            continue
+        trace_response = await client.get(f"/api/v4/projects/{project_id}/jobs/{job['id']}/trace")
+        if trace_response.status_code == HTTP_OK and search_term in trace_response.text:
+            print_match(job)
+            found = True
+    return found
 
 
 async def check_gitlab_jobs(
@@ -27,34 +61,10 @@ async def check_gitlab_jobs(
 
     async with httpx.AsyncClient(base_url=url, headers=headers, follow_redirects=True) as client:
         try:
-            # 1. Fetch recent jobs
-            # Using /jobs endpoint to get the latest jobs from the project
-            response = await client.get(f"/api/v4/projects/{project_id}/jobs")
-            response.raise_for_status()
-            jobs = response.json()
-
-            found = False
-            for job in jobs:
-                # Filter by job name and ensure it has finished (so trace is complete)
-                if job["name"] == job_name and job["status"] in {
-                    "success",
-                    "failed",
-                    "canceled",
-                }:
-                    # 2. Fetch job trace (log)
-                    trace_response = await client.get(f"/api/v4/projects/{project_id}/jobs/{job['id']}/trace")
-                    if trace_response.status_code == HTTP_OK and search_term in trace_response.text:
-                        typer.secho(
-                            f"[*] Match found in job {job['id']}:",
-                            fg=typer.colors.GREEN,
-                        )
-                        typer.echo(f"    URL:    {job['web_url']}")
-                        typer.echo(f"    Status: {job['status']}")
-                        found = True
-
+            jobs = await fetch_jobs(client, project_id)
+            found = await scan_jobs(client, project_id, jobs, job_name, search_term)
             if not found:
                 typer.echo("No matching terms found in recent jobs.")
-
         except httpx.HTTPStatusError as e:
             typer.secho(f"Error fetching data from GitLab: {e}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=1) from e

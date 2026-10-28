@@ -118,10 +118,7 @@ extend-select = [
     "YTT",
 ]
 ignore = [
-    "too-many-public-methods",
-    "docstring-missing-returns",
-    "docstring-missing-exception",
-    # Accepted: ruff drops one of each incompatible pair, we keep the D211/D212 flavour
+    # Accepted: ruff drops one of each incompatible pydocstyle pair, we keep the D211/D212 flavour
     "incorrect-blank-line-before-class",
     "multi-line-summary-second-line",
     "missing-trailing-comma",  # accepted: COM812 fights ruff format
@@ -135,22 +132,6 @@ ignore = [
     "S608",          # accepted: psql -c string in openqa-db_query_last_use_of_module
     "S101",          # 001_F1 (assert in osc-list-all-unresolvables stub)
     "F821",          # 001_F1 (undefined sql_query in the same stub)
-    # Ratchet baseline, removed by the plan task named here
-    "FIX002",        # 001_B3
-    "TD002",         # 001_B3
-    "TD003",         # 001_B3
-    "TD004",         # 001_B3
-    "PLW2901",       # 001_B3
-    "ARG001",        # 001_B3
-    "ARG005",        # 001_B3
-    "C901",          # 001_B4
-    "PLR0911",       # 001_B4
-    "PLR0912",       # 001_B4
-    "PLR0913",       # 001_B4
-    "PLR0914",       # 001_B4
-    "PLR0915",       # 001_B4
-    "PLR0917",       # 001_B4
-    "PLW0717",       # 001_B4
 ]
 
 [tool.ruff.lint.mccabe]
@@ -172,7 +153,15 @@ max-complexity = 9
     "undocumented-public-function",
     "boolean-type-hint-positional-argument",
 ]
-"gitea-review-cleanup" = ["B008", "FBT001", "FBT002", "FBT003", "S105"]  # S105: token file path, not a secret
+"gitea-review-cleanup" = [
+    "B008",
+    "FBT001",
+    "FBT002",
+    "FBT003",
+    "S105",     # S105: token file path, not a secret
+    "PLR0913",  # accepted: the 6 typer options are the CLI contract, splitting them is churn
+    "PLR0917",
+]
 "osc-sync-deps" = ["B008"]
 "osc-sync-leap" = ["B008", "T201", "FBT001", "FBT002", "FBT003"]
 "osc-get-pr-status" = ["FBT001", "FBT003"]
