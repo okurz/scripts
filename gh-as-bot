@@ -1,0 +1,84 @@
+#!/bin/sh
+set -eu
+
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/review-assistant"
+OS_AUTOINST_ENV="$CONF_DIR/write.env"
+CLASSIC_ENV="$CONF_DIR/write-classic-public_repo.env"
+
+# Resolve target repository from arguments (e.g. -R owner/repo, owner/repo#PR, or full GitHub URL)
+target=""
+for arg in "$@"; do
+    case "$arg" in
+        https://github.com/*/*)
+            target="$(echo "$arg" | sed -E 's|^https://github.com/([^/]+/[^/#?]+).*|\1|')"
+            break
+            ;;
+        github.com/*/*)
+            target="$(echo "$arg" | sed -E 's|^github.com/([^/]+/[^/#?]+).*|\1|')"
+            break
+            ;;
+        */*#*)
+            target="$(echo "$arg" | sed -E 's|#.*||')"
+            break
+            ;;
+        */*)
+            # Check if previous arg was -R / --repo
+            ;;
+    esac
+done
+
+if [ -z "$target" ]; then
+    prev=""
+    for arg in "$@"; do
+        if [ "$prev" = "-R" ] || [ "$prev" = "--repo" ]; then
+            target="$arg"
+            break
+        fi
+        prev="$arg"
+    done
+fi
+
+# If target is still undetermined, try detecting from git remote origin
+if [ -z "$target" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    origin_url="$(git remote get-url origin 2>/dev/null || true)"
+    case "$origin_url" in
+        *github.com:*)
+            target="$(echo "$origin_url" | sed -E 's|.*github.com:([^/]+/[^/.]+)(\.git)?$|\1|')"
+            ;;
+        *github.com/*)
+            target="$(echo "$origin_url" | sed -E 's|.*github.com/([^/]+/[^/.]+)(\.git)?$|\1|')"
+            ;;
+    esac
+fi
+
+# Select token file: write.env for os-autoinst/*, classic token for others
+env_file="$OS_AUTOINST_ENV"
+case "$target" in
+    os-autoinst/*)
+        env_file="$OS_AUTOINST_ENV"
+        ;;
+    ?*)
+        if [ -r "$CLASSIC_ENV" ]; then
+            env_file="$CLASSIC_ENV"
+        fi
+        ;;
+    *)
+        # Default fallback to classic if present, else write.env
+        if [ -r "$CLASSIC_ENV" ]; then
+            env_file="$CLASSIC_ENV"
+        fi
+        ;;
+esac
+
+if [ ! -r "$env_file" ]; then
+    echo "gh-as-bot: token env file not found or not readable: $env_file" >&2
+    exit 1
+fi
+
+TOKEN="$(sed -n 's/^REVIEW_ASSISTANT_GH_TOKEN=//p' "$env_file")"
+if [ -z "$TOKEN" ]; then
+    echo "gh-as-bot: REVIEW_ASSISTANT_GH_TOKEN not found in $env_file" >&2
+    exit 1
+fi
+
+exec env GH_TOKEN="$TOKEN" gh "$@"
