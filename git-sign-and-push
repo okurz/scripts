@@ -1,0 +1,1 @@
+git ci --allow-empty -m "chore: sign current state after $(git rev-parse HEAD | cut -c-8)" -a && git rp
