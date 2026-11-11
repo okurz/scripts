@@ -18,7 +18,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "coverage",
-    "gitlint",
+    "gitlint-core",
     "pre-commit",
     "pytest",
     "pytest-cov",
