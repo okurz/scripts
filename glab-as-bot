@@ -1,0 +1,77 @@
+#!/bin/sh
+set -eu
+
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/review-assistant"
+
+# Resolve target host from arguments (e.g. MR URL, repo path, or host flag)
+host=""
+for arg in "$@"; do
+    case "$arg" in
+        https://*/*/-/merge_requests/*|https://*/*/-/issues/*)
+            host="$(echo "$arg" | sed -E 's|^https://([^/]+)/.*|\1|')"
+            break
+            ;;
+        -R|--repo)
+            # Will pick up next arg in second loop if it matches host pattern
+            ;;
+    esac
+done
+
+if [ -z "$host" ]; then
+    prev=""
+    for arg in "$@"; do
+        if [ "$prev" = "-R" ] || [ "$prev" = "--repo" ]; then
+            case "$arg" in
+                */*/*) # e.g. gitlab.suse.de/openqa/salt-states-openqa
+                    host="$(echo "$arg" | cut -d/ -f1)"
+                    break
+                    ;;
+            esac
+        fi
+        prev="$arg"
+    done
+fi
+
+# Fallback: detect host from git remote origin
+if [ -z "$host" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    origin_url="$(git remote get-url origin 2>/dev/null || true)"
+    case "$origin_url" in
+        *gitlab.suse.de*)
+            host="gitlab.suse.de"
+            ;;
+        *gitlab.com*)
+            host="gitlab.com"
+            ;;
+        git@*:*|https://*/*)
+            host="$(echo "$origin_url" | sed -E -e 's|^git@([^:]+):.*|\1|' -e 's|^https?://([^/]+)/.*|\1|')"
+            ;;
+    esac
+fi
+
+# Default fallback if inside a git tree or default domain
+if [ -z "$host" ]; then
+    host="gitlab.suse.de"
+fi
+
+# Normalize host for filename (e.g. gitlab.suse.de -> gitlab-suse-de)
+host_slug="$(echo "$host" | tr '.' '-')"
+env_file="$CONF_DIR/${host_slug}.env"
+
+if [ ! -r "$env_file" ]; then
+    # Fallback to legacy or alternate naming gitlab-<slug>.env
+    if [ -r "$CONF_DIR/gitlab-${host_slug}.env" ]; then
+        env_file="$CONF_DIR/gitlab-${host_slug}.env"
+    else
+        echo "glab-as-bot: token env file not found or not readable: $env_file" >&2
+        echo "Expected REVIEW_ASSISTANT_GITLAB_TOKEN in $env_file" >&2
+        exit 1
+    fi
+fi
+
+TOKEN="$(sed -n 's/^REVIEW_ASSISTANT_GITLAB_TOKEN=//p' "$env_file")"
+if [ -z "$TOKEN" ]; then
+    echo "glab-as-bot: REVIEW_ASSISTANT_GITLAB_TOKEN not found in $env_file" >&2
+    exit 1
+fi
+
+exec env GITLAB_TOKEN="$TOKEN" GITLAB_HOST="$host" glab "$@"
