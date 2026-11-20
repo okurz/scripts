@@ -64,9 +64,9 @@ def test_search_candidates_uses_owner_scope(sut, mocker):
 
 
 def test_search_window_defaults_and_override(sut):
-    assert sut.search_window(10) == 30
-    assert sut.search_window(1) == 11
-    assert sut.search_window(10, 100) == 100
+    assert sut.search_window(10) == 100
+    assert sut.search_window(1) == 50
+    assert sut.search_window(10, 20) == 20
     assert sut.search_window(10, 5000) == sut.MAX_SEARCH_LIMIT
 
 
@@ -155,6 +155,19 @@ def test_filter_candidates_recheck_keeps_reviewed(sut):
         [cand], "os-autoinst-review", skip_reviewed=False, state_lookup=lambda _c, _l: ("h", True)
     )
     assert kept == [cand]
+
+
+def test_filter_candidates_stops_once_the_batch_is_full(sut):
+    cands = [make_candidate(sut, number=n) for n in range(1, 6)]
+    calls = []
+
+    def lookup(cand: object, _login: str) -> tuple[str, bool]:
+        calls.append(cand.number)
+        return "h", cand.number == 1
+
+    kept = sut.filter_candidates(cands, "os-autoinst-review", skip_reviewed=True, limit=2, state_lookup=lookup)
+    assert [c.number for c in kept] == [2, 3]
+    assert calls == [1, 2, 3]
 
 
 def test_select_candidates_newest_first_and_limited(sut):
@@ -290,7 +303,7 @@ def test_main_reports_the_searched_window_when_empty(sut, mocker, capsys):
     mocker.patch.object(sut, "search_candidates", return_value=[])
     assert sut.main(["--owner", "os-autoinst", "--limit", "2"]) == 0
     err = capsys.readouterr().err
-    assert "newest 12 open PRs" in err
+    assert "newest 50 open PRs" in err
     assert "--oldest" in err
 
 

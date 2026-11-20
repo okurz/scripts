@@ -73,7 +73,7 @@ def parse_github_repo(url: str) -> str | None:
 
 def search_window(limit: int, window: int = 0) -> int:
     """Return how many search results to fetch for a batch of the given size."""
-    return min(max(window or max(limit * 3, limit + 10), limit), MAX_SEARCH_LIMIT)
+    return min(max(window or max(limit * 10, 50), limit), MAX_SEARCH_LIMIT)
 
 
 def search_candidates(
@@ -158,6 +158,7 @@ def filter_candidates(
     *,
     skip_reviewed: bool,
     include_bots: bool = False,
+    limit: int | None = None,
     state_lookup: Callable[[Candidate, str], tuple[str, bool]] | None = None,
 ) -> list[Candidate]:
     """Drop drafts, bot-authored PRs, and (optionally) PRs already reviewed on head."""
@@ -178,6 +179,8 @@ def filter_candidates(
             if reviewed:
                 continue
         kept.append(cand)
+        if limit is not None and len(kept) >= limit:
+            break
     return kept
 
 
@@ -286,7 +289,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--list", action="store_true", help="print the selected PRs and exit without reviewing")
     parser.add_argument("--oldest", action="store_true", help="sweep the oldest open PRs instead of the newest")
-    parser.add_argument("--window", type=int, default=0, help="open PRs to search before filtering (default: 3x limit)")
+    parser.add_argument(
+        "--window", type=int, default=0, help="open PRs to search before filtering (default: 10x limit, min 50)"
+    )
     parser.add_argument(
         "--timeout",
         type=float,
@@ -319,6 +324,7 @@ def main(argv: list[str] | None = None) -> int:
             login,
             skip_reviewed=not args.recheck,
             include_bots=args.include_bots,
+            limit=args.limit,
         ),
         args.limit,
         oldest=args.oldest,
