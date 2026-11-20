@@ -56,6 +56,8 @@ def test_search_candidates_uses_owner_scope(sut, mocker):
     assert cmd[:2] == ["gh-as-bot", "search"]
     assert "--owner" in cmd
     assert cmd[cmd.index("--owner") + 1] == "os-autoinst"
+    assert cmd[cmd.index("--sort") + 1] == "created"
+    assert cmd[cmd.index("--order") + 1] == "asc"
     assert "os-autoinst/openQA" not in cmd
     assert got[0].repo == "os-autoinst/openQA"
     assert got[0].is_draft is False
