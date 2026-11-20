@@ -63,6 +63,13 @@ def test_search_candidates_uses_owner_scope(sut, mocker):
     assert got[0].is_draft is False
 
 
+def test_search_window_defaults_and_override(sut):
+    assert sut.search_window(10) == 30
+    assert sut.search_window(1) == 11
+    assert sut.search_window(10, 100) == 100
+    assert sut.search_window(10, 5000) == sut.MAX_SEARCH_LIMIT
+
+
 def test_search_candidates_oldest_scope(sut, mocker):
     run = mocker.patch.object(sut, "run")
     run.return_value = MagicMock(returncode=0, stderr="", stdout="[]")
@@ -260,6 +267,7 @@ def test_parse_args_defaults(sut):
     assert args.dry_run is False
     assert args.list is False
     assert args.oldest is False
+    assert args.window == 0
     assert args.timeout == sut.DEFAULT_TIMEOUT
     assert args.include_bots is False
     assert args.recheck is False
@@ -275,6 +283,15 @@ def test_main_list_prints_selection_without_reviewing(sut, mocker, capsys):
     out = capsys.readouterr().out
     assert "os-autoinst/openQA#1" in out
     run_review.assert_not_called()
+
+
+def test_main_reports_the_searched_window_when_empty(sut, mocker, capsys):
+    mocker.patch.object(sut, "bot_login", return_value="bot")
+    mocker.patch.object(sut, "search_candidates", return_value=[])
+    assert sut.main(["--owner", "os-autoinst", "--limit", "2"]) == 0
+    err = capsys.readouterr().err
+    assert "newest 12 open PRs" in err
+    assert "--oldest" in err
 
 
 def test_main_requires_a_scope(sut, mocker, capsys):

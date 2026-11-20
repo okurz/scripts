@@ -71,7 +71,14 @@ def parse_github_repo(url: str) -> str | None:
     return match.group(1) if match else None
 
 
-def search_candidates(owner: str, repos: list[str], limit: int, *, oldest: bool = False) -> list[Candidate]:
+def search_window(limit: int, window: int = 0) -> int:
+    """Return how many search results to fetch for a batch of the given size."""
+    return min(max(window or max(limit * 3, limit + 10), limit), MAX_SEARCH_LIMIT)
+
+
+def search_candidates(
+    owner: str, repos: list[str], limit: int, *, oldest: bool = False, window: int = 0
+) -> list[Candidate]:
     """Enumerate open PRs for an org or an explicit repository list."""
     cmd = [
         "gh-as-bot",
@@ -80,7 +87,7 @@ def search_candidates(owner: str, repos: list[str], limit: int, *, oldest: bool 
         "--state",
         "open",
         "--limit",
-        str(min(max(limit * 3, limit + 10), MAX_SEARCH_LIMIT)),
+        str(search_window(limit, window)),
         "--sort",
         "created",
         "--order",
@@ -279,6 +286,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--list", action="store_true", help="print the selected PRs and exit without reviewing")
     parser.add_argument("--oldest", action="store_true", help="sweep the oldest open PRs instead of the newest")
+    parser.add_argument("--window", type=int, default=0, help="open PRs to search before filtering (default: 3x limit)")
     parser.add_argument(
         "--timeout",
         type=float,
@@ -304,9 +312,10 @@ def main(argv: list[str] | None = None) -> int:
         print("error: give --owner or -R owner/repo (or run inside a checkout)", file=sys.stderr)
         return 2
     login = bot_login()
+    window = search_window(args.limit, args.window)
     candidates = select_candidates(
         filter_candidates(
-            search_candidates(owner, args.repos, args.limit, oldest=args.oldest),
+            search_candidates(owner, args.repos, args.limit, oldest=args.oldest, window=window),
             login,
             skip_reviewed=not args.recheck,
             include_bots=args.include_bots,
@@ -315,7 +324,12 @@ def main(argv: list[str] | None = None) -> int:
         oldest=args.oldest,
     )
     if not candidates:
-        print(f"no reviewable PRs for {', '.join(args.repos) or owner}", file=sys.stderr)
+        end = "oldest" if args.oldest else "newest"
+        print(
+            f"no reviewable PRs among the {end} {window} open PRs for {', '.join(args.repos) or owner}", file=sys.stderr
+        )
+        if not args.oldest:
+            print("use --oldest to sweep the backlog or raise --window to look deeper", file=sys.stderr)
         return 0
     if args.list:
         for cand in candidates:
