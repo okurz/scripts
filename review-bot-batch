@@ -1,0 +1,316 @@
+#!/usr/bin/env python3
+"""Review many pull requests as the review bot, one isolated session per PR.
+
+Resolves a scope (an org or a list of repositories) with ``gh search prs``, drops drafts,
+bot-authored PRs and PRs the bot already reviewed on the current head, then runs
+``pi -p "/review-as-bot <url> --post"`` serially in the matching local checkout. Posting is
+the default; ``--dry-run`` prints each draft instead. A failing PR is reported and the batch
+continues.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+BOT_FALLBACK = "os-autoinst-review"
+DEFAULT_ROOTS = (Path.home() / "local" / "os-autoinst",)
+DEFAULT_CACHE = Path.home() / ".cache" / "review-bot"
+DEFAULT_LIMIT = 10
+MAX_SEARCH_LIMIT = 1000
+SEARCH_FIELDS = "number,title,isDraft,author,createdAt,repository"
+JQ_REVIEW_STATE = '.[] | select(.user.login == "{login}") | "\\(.state)\\t\\(.commit_id)"'
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """An open PR that may be reviewed in this batch."""
+
+    repo: str
+    number: int
+    title: str
+    author: str
+    created_at: str
+    is_draft: bool = False
+
+    @property
+    def url(self) -> str:
+        """Canonical PR URL passed to review-as-bot."""
+        return f"https://github.com/{self.repo}/pull/{self.number}"
+
+    @property
+    def slug(self) -> str:
+        """Filesystem-safe log name."""
+        return f"{self.repo.replace('/', '-')}-{self.number}"
+
+
+def run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    """Run a command and capture its output without raising on failure."""
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
+
+
+def bot_login() -> str:
+    """Return the review bot login, falling back to the known identity."""
+    res = run(["gh-as-bot", "api", "user", "--jq", ".login"])
+    return res.stdout.strip() if res.returncode == 0 and res.stdout.strip() else BOT_FALLBACK
+
+
+def parse_github_repo(url: str) -> str | None:
+    """Return ``owner/repo`` for a GitHub remote URL, else None."""
+    match = re.search(r"github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?$", url.strip())
+    return match.group(1) if match else None
+
+
+def search_candidates(owner: str, repos: list[str], limit: int) -> list[Candidate]:
+    """Enumerate open PRs for an org or an explicit repository list."""
+    cmd = [
+        "gh-as-bot",
+        "search",
+        "prs",
+        "--state",
+        "open",
+        "--limit",
+        str(min(max(limit * 3, limit + 10), MAX_SEARCH_LIMIT)),
+        "--json",
+        SEARCH_FIELDS,
+    ]
+    if repos:
+        for repo in repos:
+            cmd += ["-R", repo]
+    else:
+        cmd += ["--owner", owner]
+    res = run(cmd)
+    if res.returncode != 0:
+        msg = f"gh search prs failed: {res.stderr.strip()}"
+        raise RuntimeError(msg)
+    return [candidate_from_json(item) for item in json.loads(res.stdout or "[]")]
+
+
+def candidate_from_json(item: dict[str, Any]) -> Candidate:
+    """Build a Candidate from one ``gh search prs --json`` record."""
+    author = item.get("author") or {}
+    return Candidate(
+        repo=item["repository"]["nameWithOwner"],
+        number=int(item["number"]),
+        title=item.get("title", ""),
+        author=author.get("login", ""),
+        created_at=item.get("createdAt", ""),
+        is_draft=bool(item.get("isDraft")),
+    )
+
+
+def pr_state(cand: Candidate, login: str) -> tuple[str, bool]:
+    """Return the PR head sha and whether the bot already reviewed that head."""
+    view = run([
+        "gh-as-bot",
+        "pr",
+        "view",
+        str(cand.number),
+        "-R",
+        cand.repo,
+        "--json",
+        "headRefOid",
+        "--jq",
+        ".headRefOid",
+    ])
+    if view.returncode != 0:
+        msg = f"cannot read head of {cand.repo}#{cand.number}: {view.stderr.strip()}"
+        raise RuntimeError(msg)
+    head = view.stdout.strip()
+    reviews = run([
+        "gh-as-bot",
+        "api",
+        f"repos/{cand.repo}/pulls/{cand.number}/reviews",
+        "--jq",
+        JQ_REVIEW_STATE.format(login=login),
+    ])
+    reviewed = any(
+        state in {"APPROVED", "CHANGES_REQUESTED"} and commit == head
+        for state, commit in (line.partition("\t")[::2] for line in reviews.stdout.splitlines())
+    )
+    return head, reviewed
+
+
+def filter_candidates(
+    candidates: list[Candidate],
+    login: str,
+    *,
+    skip_reviewed: bool,
+    include_bots: bool = False,
+    state_lookup: Callable[[Candidate, str], tuple[str, bool]] | None = None,
+) -> list[Candidate]:
+    """Drop drafts, bot-authored PRs, and (optionally) PRs already reviewed on head."""
+    if state_lookup is None:
+        state_lookup = pr_state
+    kept: list[Candidate] = []
+    for cand in candidates:
+        if cand.is_draft or cand.author == login:
+            continue
+        if not include_bots and cand.author.endswith("[bot]"):
+            continue
+        if skip_reviewed and state_lookup(cand, login)[1]:
+            continue
+        kept.append(cand)
+    return kept
+
+
+def select_candidates(candidates: list[Candidate], limit: int) -> list[Candidate]:
+    """Take the oldest PRs first, up to the batch limit."""
+    return sorted(candidates, key=lambda cand: cand.created_at)[:limit]
+
+
+def discover_checkouts(roots: list[Path] | tuple[Path, ...]) -> dict[str, Path]:
+    """Map ``owner/repo`` to a local checkout under the given roots."""
+    found: dict[str, Path] = {}
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for config in root.glob("*/.git/config"):
+            checkout = config.parent.parent
+            res = run(["git", "-C", str(checkout), "remote", "get-url", "origin"])
+            repo = parse_github_repo(res.stdout) if res.returncode == 0 else None
+            if repo and repo not in found:
+                found[repo] = checkout
+    return found
+
+
+def ensure_checkout(repo: str, checkouts: dict[str, Path], cache: Path, *, allow_clone: bool) -> Path:
+    """Return a local checkout for the repo, cloning into the cache if allowed."""
+    if repo in checkouts:
+        return checkouts[repo]
+    target = cache / repo.replace("/", "-")
+    if target.is_dir():
+        return target
+    if not allow_clone:
+        msg = f"no local checkout for {repo} (use without --no-clone to clone)"
+        raise RuntimeError(msg)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    res = run(["git", "clone", "--filter=blob:none", "--no-checkout", f"https://github.com/{repo}.git", str(target)])
+    if res.returncode != 0:
+        msg = f"cannot clone {repo}: {res.stderr.strip()}"
+        raise RuntimeError(msg)
+    return target
+
+
+def fetch_pr_head(checkout: Path, number: int) -> None:
+    """Fetch the PR head ref so the review session can create a worktree from it."""
+    res = run(["git", "-C", str(checkout), "fetch", "--no-tags", "origin", f"refs/pull/{number}/head"])
+    if res.returncode != 0:
+        msg = f"cannot fetch PR head for #{number}: {res.stderr.strip()}"
+        raise RuntimeError(msg)
+
+
+def review_command(cand: Candidate, *, dry_run: bool, pi_args: list[str]) -> list[str]:
+    """Build the nested pi invocation for one PR."""
+    mode = "--dry-run" if dry_run else "--post"
+    return ["pi", *pi_args, "-p", f"/review-as-bot {cand.url} {mode}"]
+
+
+def review_succeeded(returncode: int, output: str) -> bool:
+    """Treat a claimed block or a failed run as unsuccessful even on exit 0."""
+    blocked = "--- REVIEW FAILED" in output or "--- REVIEW BLOCKED" in output
+    return returncode == 0 and not blocked
+
+
+def run_review(
+    cand: Candidate,
+    checkout: Path,
+    *,
+    dry_run: bool,
+    pi_args: list[str],
+    log_dir: Path,
+) -> tuple[bool, Path]:
+    """Run one review session, tee its output to a log, and return (ok, log path)."""
+    fetch_pr_head(checkout, cand.number)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log = log_dir / f"{cand.slug}.log"
+    cmd = review_command(cand, dry_run=dry_run, pi_args=pi_args)
+    with log.open("w", encoding="utf-8") as handle:
+        res = subprocess.run(cmd, cwd=checkout, stdout=handle, stderr=subprocess.STDOUT, check=False)
+    return review_succeeded(res.returncode, log.read_text(encoding="utf-8", errors="replace")), log
+
+
+def infer_owner() -> str:
+    """Infer the GitHub owner from the current checkout's origin."""
+    res = run(["git", "remote", "get-url", "origin"])
+    repo = parse_github_repo(res.stdout) if res.returncode == 0 else None
+    return repo.split("/")[0] if repo else ""
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse the command line."""
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--owner", help="GitHub org/user to review (default: inferred from origin)")
+    parser.add_argument("-R", "--repo", action="append", default=[], dest="repos", help="owner/repo, repeatable")
+    parser.add_argument(
+        "--limit", type=int, default=DEFAULT_LIMIT, help=f"max PRs to review (default: {DEFAULT_LIMIT})"
+    )
+    parser.add_argument("--list", action="store_true", help="print the selected PRs and exit without reviewing")
+    parser.add_argument("--dry-run", action="store_true", help="print each draft instead of posting (default: post)")
+    parser.add_argument("--recheck", action="store_true", help="also review PRs the bot already reviewed on head")
+    parser.add_argument("--include-bots", action="store_true", help="include PRs authored by dependency bots")
+    parser.add_argument("--no-clone", action="store_true", help="skip repos with no local checkout instead of cloning")
+    parser.add_argument("--root", action="append", default=[], dest="roots", help="checkout root, repeatable")
+    parser.add_argument("--log-dir", default="", help="directory for per-PR logs (default: ~/.cache/review-bot/logs)")
+    parser.add_argument("--model", default="", help="pass --model to the nested pi run")
+    parser.add_argument("--pi-arg", action="append", default=[], dest="pi_args", help="extra nested pi argument")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the batch and return a shell exit code."""
+    args = parse_args(argv)
+    owner = args.owner or infer_owner()
+    if not owner and not args.repos:
+        print("error: give --owner or -R owner/repo (or run inside a checkout)", file=sys.stderr)
+        return 2
+    login = bot_login()
+    candidates = select_candidates(
+        filter_candidates(
+            search_candidates(owner, args.repos, args.limit),
+            login,
+            skip_reviewed=not args.recheck,
+            include_bots=args.include_bots,
+        ),
+        args.limit,
+    )
+    if not candidates:
+        print(f"no reviewable PRs for {', '.join(args.repos) or owner}", file=sys.stderr)
+        return 0
+    if args.list:
+        for cand in candidates:
+            print(f"{cand.repo}#{cand.number}\t{cand.created_at[:10]}\t{cand.author}\t{cand.title}")
+        return 0
+    mode = "dry-run" if args.dry_run else "post"
+    print(f"{len(candidates)} PR(s), mode={mode}, reviewer={login}", file=sys.stderr)
+    roots = [Path(root).expanduser() for root in args.roots] or list(DEFAULT_ROOTS)
+    checkouts = discover_checkouts(roots)
+    log_dir = Path(args.log_dir).expanduser() if args.log_dir else DEFAULT_CACHE / "logs"
+    pi_args = (["--model", args.model] if args.model else []) + args.pi_args
+    failures = 0
+    for cand in candidates:
+        print(f"reviewing {cand.repo}#{cand.number}: {cand.title[:60]}", file=sys.stderr)
+        try:
+            checkout = ensure_checkout(cand.repo, checkouts, DEFAULT_CACHE, allow_clone=not args.no_clone)
+            ok, log = run_review(cand, checkout, dry_run=args.dry_run, pi_args=pi_args, log_dir=log_dir)
+        except RuntimeError as err:
+            print(f"FAILED  {cand.repo}#{cand.number}: {err}", file=sys.stderr)
+            failures += 1
+            continue
+        print(f"{'ok' if ok else 'FAILED'}  {cand.repo}#{cand.number}  log={log}", file=sys.stderr)
+        failures += 0 if ok else 1
+    print(f"done: {len(candidates) - failures} ok, {failures} failed", file=sys.stderr)
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

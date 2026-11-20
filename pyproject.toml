@@ -170,6 +170,7 @@ max-complexity = 9
 "mac-to-ipv6" = ["T201"]
 "obs-pr-repair" = ["T201"]
 "redmine-fetcher" = ["T201"]
+"review-bot-batch" = ["T201"]
 
 [tool.ruff.format]
 docstring-code-format = true
