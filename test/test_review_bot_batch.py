@@ -1,5 +1,6 @@
 """Tests for review-bot-batch: scope parsing, selection, checkout mapping and dispatch."""
 
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -117,6 +118,20 @@ def test_filter_candidates_skips_dependency_bots_by_default(sut):
     assert [c.number for c in kept] == [1, 2]
 
 
+def test_filter_candidates_skips_candidate_with_unreadable_state(sut, capsys):
+    cands = [make_candidate(sut, number=1), make_candidate(sut, number=2)]
+
+    def lookup(cand: object, _login: str) -> tuple[str, bool]:
+        if cand.number == 1:
+            msg = "api down"
+            raise RuntimeError(msg)
+        return "h", False
+
+    kept = sut.filter_candidates(cands, "os-autoinst-review", skip_reviewed=True, state_lookup=lookup)
+    assert [c.number for c in kept] == [2]
+    assert "skip os-autoinst/openQA#1: api down" in capsys.readouterr().err
+
+
 def test_filter_candidates_recheck_keeps_reviewed(sut):
     cand = make_candidate(sut, number=1)
     kept = sut.filter_candidates(
@@ -214,10 +229,18 @@ def test_run_review_writes_log_and_detects_block(sut, tmp_path, mocker):
     mocker.patch.object(sut, "fetch_pr_head")
     mocker.patch.object(sut.subprocess, "run", return_value=MagicMock(returncode=0))
     log = tmp_path / "logs"
-    ok, path = sut.run_review(make_candidate(sut), tmp_path, dry_run=False, pi_args=[], log_dir=log)
+    ok, path = sut.run_review(make_candidate(sut), tmp_path, dry_run=False, pi_args=[], log_dir=log, timeout=5)
     assert ok is True
     assert path == log / "os-autoinst-openQA-1.log"
     assert path.exists()
+
+
+def test_run_review_kills_and_records_a_timeout(sut, tmp_path, mocker):
+    mocker.patch.object(sut, "fetch_pr_head")
+    mocker.patch.object(sut.subprocess, "run", side_effect=subprocess.TimeoutExpired(["pi"], 5))
+    ok, path = sut.run_review(make_candidate(sut), tmp_path, dry_run=False, pi_args=[], log_dir=tmp_path, timeout=5)
+    assert ok is False
+    assert "REVIEW FAILED (timeout after 5s)" in path.read_text()
 
 
 def test_parse_args_defaults(sut):
@@ -225,6 +248,7 @@ def test_parse_args_defaults(sut):
     assert args.limit == sut.DEFAULT_LIMIT
     assert args.dry_run is False
     assert args.list is False
+    assert args.timeout == sut.DEFAULT_TIMEOUT
     assert args.include_bots is False
     assert args.recheck is False
 

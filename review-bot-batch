@@ -26,6 +26,7 @@ BOT_FALLBACK = "os-autoinst-review"
 DEFAULT_ROOTS = (Path.home() / "local" / "os-autoinst",)
 DEFAULT_CACHE = Path.home() / ".cache" / "review-bot"
 DEFAULT_LIMIT = 10
+DEFAULT_TIMEOUT = 1200.0
 MAX_SEARCH_LIMIT = 1000
 SEARCH_FIELDS = "number,title,isDraft,author,createdAt,repository"
 JQ_REVIEW_STATE = '.[] | select(.user.login == "{login}") | "\\(.state)\\t\\(.commit_id)"'
@@ -157,8 +158,14 @@ def filter_candidates(
             continue
         if not include_bots and cand.author.endswith("[bot]"):
             continue
-        if skip_reviewed and state_lookup(cand, login)[1]:
-            continue
+        if skip_reviewed:
+            try:
+                reviewed = state_lookup(cand, login)[1]
+            except RuntimeError as err:
+                print(f"skip {cand.repo}#{cand.number}: {err}", file=sys.stderr)
+                continue
+            if reviewed:
+                continue
         kept.append(cand)
     return kept
 
@@ -228,14 +235,25 @@ def run_review(
     dry_run: bool,
     pi_args: list[str],
     log_dir: Path,
+    timeout: float,
 ) -> tuple[bool, Path]:
     """Run one review session, tee its output to a log, and return (ok, log path)."""
     fetch_pr_head(checkout, cand.number)
     log_dir.mkdir(parents=True, exist_ok=True)
     log = log_dir / f"{cand.slug}.log"
     cmd = review_command(cand, dry_run=dry_run, pi_args=pi_args)
+    timed_out = False
     with log.open("w", encoding="utf-8") as handle:
-        res = subprocess.run(cmd, cwd=checkout, stdout=handle, stderr=subprocess.STDOUT, check=False)
+        try:
+            res = subprocess.run(
+                cmd, cwd=checkout, stdout=handle, stderr=subprocess.STDOUT, check=False, timeout=timeout
+            )
+        except subprocess.TimeoutExpired:
+            timed_out = True
+    if timed_out:
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(f"\n--- REVIEW FAILED (timeout after {timeout:.0f}s) ---\n")
+        return False, log
     return review_succeeded(res.returncode, log.read_text(encoding="utf-8", errors="replace")), log
 
 
@@ -255,6 +273,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--limit", type=int, default=DEFAULT_LIMIT, help=f"max PRs to review (default: {DEFAULT_LIMIT})"
     )
     parser.add_argument("--list", action="store_true", help="print the selected PRs and exit without reviewing")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        help=f"seconds per PR before killing pi (default: {DEFAULT_TIMEOUT:.0f})",
+    )
     parser.add_argument("--dry-run", action="store_true", help="print each draft instead of posting (default: post)")
     parser.add_argument("--recheck", action="store_true", help="also review PRs the bot already reviewed on head")
     parser.add_argument("--include-bots", action="store_true", help="include PRs authored by dependency bots")
@@ -301,7 +325,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"reviewing {cand.repo}#{cand.number}: {cand.title[:60]}", file=sys.stderr)
         try:
             checkout = ensure_checkout(cand.repo, checkouts, DEFAULT_CACHE, allow_clone=not args.no_clone)
-            ok, log = run_review(cand, checkout, dry_run=args.dry_run, pi_args=pi_args, log_dir=log_dir)
+            ok, log = run_review(
+                cand, checkout, dry_run=args.dry_run, pi_args=pi_args, log_dir=log_dir, timeout=args.timeout
+            )
         except RuntimeError as err:
             print(f"FAILED  {cand.repo}#{cand.number}: {err}", file=sys.stderr)
             failures += 1
