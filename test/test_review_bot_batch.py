@@ -57,10 +57,18 @@ def test_search_candidates_uses_owner_scope(sut, mocker):
     assert "--owner" in cmd
     assert cmd[cmd.index("--owner") + 1] == "os-autoinst"
     assert cmd[cmd.index("--sort") + 1] == "created"
-    assert cmd[cmd.index("--order") + 1] == "asc"
+    assert cmd[cmd.index("--order") + 1] == "desc"
     assert "os-autoinst/openQA" not in cmd
     assert got[0].repo == "os-autoinst/openQA"
     assert got[0].is_draft is False
+
+
+def test_search_candidates_oldest_scope(sut, mocker):
+    run = mocker.patch.object(sut, "run")
+    run.return_value = MagicMock(returncode=0, stderr="", stdout="[]")
+    sut.search_candidates("os-autoinst", [], 1, oldest=True)
+    cmd = run.call_args.args[0]
+    assert cmd[cmd.index("--order") + 1] == "asc"
 
 
 def test_search_candidates_uses_repo_scope(sut, mocker):
@@ -142,13 +150,14 @@ def test_filter_candidates_recheck_keeps_reviewed(sut):
     assert kept == [cand]
 
 
-def test_select_candidates_oldest_first_and_limited(sut):
+def test_select_candidates_newest_first_and_limited(sut):
     cands = [
         make_candidate(sut, number=1, created="2026-02-01"),
         make_candidate(sut, number=2, created="2026-01-01"),
         make_candidate(sut, number=3, created="2026-03-01"),
     ]
-    assert [c.number for c in sut.select_candidates(cands, 2)] == [2, 1]
+    assert [c.number for c in sut.select_candidates(cands, 2)] == [3, 1]
+    assert [c.number for c in sut.select_candidates(cands, 2, oldest=True)] == [2, 1]
 
 
 def test_review_command_post_and_dry_run(sut):
@@ -250,6 +259,7 @@ def test_parse_args_defaults(sut):
     assert args.limit == sut.DEFAULT_LIMIT
     assert args.dry_run is False
     assert args.list is False
+    assert args.oldest is False
     assert args.timeout == sut.DEFAULT_TIMEOUT
     assert args.include_bots is False
     assert args.recheck is False

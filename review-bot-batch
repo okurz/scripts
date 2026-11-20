@@ -71,7 +71,7 @@ def parse_github_repo(url: str) -> str | None:
     return match.group(1) if match else None
 
 
-def search_candidates(owner: str, repos: list[str], limit: int) -> list[Candidate]:
+def search_candidates(owner: str, repos: list[str], limit: int, *, oldest: bool = False) -> list[Candidate]:
     """Enumerate open PRs for an org or an explicit repository list."""
     cmd = [
         "gh-as-bot",
@@ -84,7 +84,7 @@ def search_candidates(owner: str, repos: list[str], limit: int) -> list[Candidat
         "--sort",
         "created",
         "--order",
-        "asc",
+        "asc" if oldest else "desc",
         "--json",
         SEARCH_FIELDS,
     ]
@@ -174,9 +174,10 @@ def filter_candidates(
     return kept
 
 
-def select_candidates(candidates: list[Candidate], limit: int) -> list[Candidate]:
-    """Take the oldest PRs first, up to the batch limit."""
-    return sorted(candidates, key=lambda cand: cand.created_at)[:limit]
+def select_candidates(candidates: list[Candidate], limit: int, *, oldest: bool = False) -> list[Candidate]:
+    """Take the newest (or oldest) PRs up to the batch limit."""
+    ordered = sorted(candidates, key=lambda cand: cand.created_at, reverse=not oldest)
+    return ordered[:limit]
 
 
 def discover_checkouts(roots: list[Path] | tuple[Path, ...]) -> dict[str, Path]:
@@ -277,6 +278,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--limit", type=int, default=DEFAULT_LIMIT, help=f"max PRs to review (default: {DEFAULT_LIMIT})"
     )
     parser.add_argument("--list", action="store_true", help="print the selected PRs and exit without reviewing")
+    parser.add_argument("--oldest", action="store_true", help="sweep the oldest open PRs instead of the newest")
     parser.add_argument(
         "--timeout",
         type=float,
@@ -304,12 +306,13 @@ def main(argv: list[str] | None = None) -> int:
     login = bot_login()
     candidates = select_candidates(
         filter_candidates(
-            search_candidates(owner, args.repos, args.limit),
+            search_candidates(owner, args.repos, args.limit, oldest=args.oldest),
             login,
             skip_reviewed=not args.recheck,
             include_bots=args.include_bots,
         ),
         args.limit,
+        oldest=args.oldest,
     )
     if not candidates:
         print(f"no reviewable PRs for {', '.join(args.repos) or owner}", file=sys.stderr)
