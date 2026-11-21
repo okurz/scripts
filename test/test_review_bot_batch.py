@@ -51,7 +51,7 @@ def test_search_candidates_uses_owner_scope(sut, mocker):
         stdout='[{"number": 1, "title": "t", "isDraft": false, "author": {"login": "okurz"}, '
         '"createdAt": "2026-01-01T00:00:00Z", "repository": {"nameWithOwner": "os-autoinst/openQA"}}]',
     )
-    got = sut.search_candidates("os-autoinst", [], 2)
+    got = sut.search_candidates(["os-autoinst"], [], 2)
     cmd = run.call_args.args[0]
     assert cmd[:2] == ["gh-as-bot", "search"]
     assert "--owner" in cmd
@@ -73,7 +73,7 @@ def test_search_window_defaults_and_override(sut):
 def test_search_candidates_oldest_scope(sut, mocker):
     run = mocker.patch.object(sut, "run")
     run.return_value = MagicMock(returncode=0, stderr="", stdout="[]")
-    sut.search_candidates("os-autoinst", [], 1, oldest=True)
+    sut.search_candidates(["os-autoinst"], [], 1, oldest=True)
     cmd = run.call_args.args[0]
     assert cmd[cmd.index("--order") + 1] == "asc"
 
@@ -81,16 +81,31 @@ def test_search_candidates_oldest_scope(sut, mocker):
 def test_search_candidates_uses_repo_scope(sut, mocker):
     run = mocker.patch.object(sut, "run")
     run.return_value = MagicMock(returncode=0, stderr="", stdout="[]")
-    sut.search_candidates("", ["os-autoinst/openQA", "os-autoinst/os-autoinst"], 1)
+    sut.search_candidates([], ["os-autoinst/openQA", "os-autoinst/os-autoinst"], 1)
     cmd = run.call_args.args[0]
     assert cmd.count("-R") == 2
     assert "--owner" not in cmd
 
 
+def test_search_candidates_unions_owners_and_repos(sut, mocker):
+    run = mocker.patch.object(sut, "run")
+    owner_item = '{"number": 1, "title": "t", "isDraft": false, "author": {"login": "a"}, "createdAt": "2026-01-01", "repository": {"nameWithOwner": "os-autoinst/openQA"}}'
+    repo_item = '{"number": 2, "title": "t", "isDraft": false, "author": {"login": "b"}, "createdAt": "2026-01-02", "repository": {"nameWithOwner": "openSUSE/qem-bot"}}'
+    run.side_effect = [
+        MagicMock(returncode=0, stderr="", stdout=f"[{owner_item}]"),
+        MagicMock(returncode=0, stderr="", stdout=f"[{repo_item}]"),
+    ]
+    got = sut.search_candidates(["os-autoinst"], ["openSUSE/qem-bot"], 5)
+    assert run.call_count == 2
+    assert run.call_args_list[0].args[0][-2:] == ["--owner", "os-autoinst"]
+    assert run.call_args_list[1].args[0][-2:] == ["-R", "openSUSE/qem-bot"]
+    assert {c.repo for c in got} == {"os-autoinst/openQA", "openSUSE/qem-bot"}
+
+
 def test_search_candidates_reports_gh_failure(sut, mocker):
     mocker.patch.object(sut, "run", return_value=MagicMock(returncode=1, stderr="boom", stdout=""))
     with pytest.raises(RuntimeError, match="gh search prs failed: boom"):
-        sut.search_candidates("os-autoinst", [], 1)
+        sut.search_candidates(["os-autoinst"], [], 1)
 
 
 def test_pr_state_detects_bot_review_on_head(sut, mocker):

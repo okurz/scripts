@@ -76,10 +76,8 @@ def search_window(limit: int, window: int = 0) -> int:
     return min(max(window or max(limit * 10, 50), limit), MAX_SEARCH_LIMIT)
 
 
-def search_candidates(
-    owner: str, repos: list[str], limit: int, *, oldest: bool = False, window: int = 0
-) -> list[Candidate]:
-    """Enumerate open PRs for an org or an explicit repository list."""
+def search_scope(scope: list[str], limit: int, *, oldest: bool, window: int) -> list[Candidate]:
+    """Enumerate open PRs for one gh search scope (owner or repository filters)."""
     cmd = [
         "gh-as-bot",
         "search",
@@ -94,17 +92,28 @@ def search_candidates(
         "asc" if oldest else "desc",
         "--json",
         SEARCH_FIELDS,
+        *scope,
     ]
-    if repos:
-        for repo in repos:
-            cmd += ["-R", repo]
-    else:
-        cmd += ["--owner", owner]
     res = run(cmd)
     if res.returncode != 0:
         msg = f"gh search prs failed: {res.stderr.strip()}"
         raise RuntimeError(msg)
     return [candidate_from_json(item) for item in json.loads(res.stdout or "[]")]
+
+
+def search_candidates(
+    owners: list[str], repos: list[str], limit: int, *, oldest: bool = False, window: int = 0
+) -> list[Candidate]:
+    """Enumerate open PRs for the union of owners and explicit repositories."""
+    found: dict[tuple[str, int], Candidate] = {}
+    for owner in owners:
+        for cand in search_scope(["--owner", owner], limit=limit, oldest=oldest, window=window):
+            found[cand.repo, cand.number] = cand
+    if repos:
+        scope = [arg for repo in repos for arg in ("-R", repo)]
+        for cand in search_scope(scope, limit=limit, oldest=oldest, window=window):
+            found[cand.repo, cand.number] = cand
+    return list(found.values())
 
 
 def candidate_from_json(item: dict[str, Any]) -> Candidate:
@@ -293,7 +302,9 @@ def infer_owner() -> str:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse the command line."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--owner", help="GitHub org/user to review (default: inferred from origin)")
+    parser.add_argument(
+        "--owner", action="append", default=[], help="GitHub org/user to review, repeatable (default: inferred)"
+    )
     parser.add_argument("-R", "--repo", action="append", default=[], dest="repos", help="owner/repo, repeatable")
     parser.add_argument(
         "--limit", type=int, default=DEFAULT_LIMIT, help=f"max PRs to review (default: {DEFAULT_LIMIT})"
@@ -323,15 +334,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     """Run the batch and return a shell exit code."""
     args = parse_args(argv)
-    owner = args.owner or infer_owner()
-    if not owner and not args.repos:
+    owners = args.owner or ([infer_owner()] if not args.repos else [])
+    owners = [owner for owner in owners if owner]
+    if not owners and not args.repos:
         print("error: give --owner or -R owner/repo (or run inside a checkout)", file=sys.stderr)
         return 2
     login = bot_login()
     window = search_window(args.limit, args.window)
     candidates = select_candidates(
         filter_candidates(
-            search_candidates(owner, args.repos, args.limit, oldest=args.oldest, window=window),
+            search_candidates(owners, args.repos, args.limit, oldest=args.oldest, window=window),
             login,
             skip_reviewed=not args.recheck,
             include_bots=args.include_bots,
@@ -343,7 +355,8 @@ def main(argv: list[str] | None = None) -> int:
     if not candidates:
         end = "oldest" if args.oldest else "newest"
         print(
-            f"no reviewable PRs among the {end} {window} open PRs for {', '.join(args.repos) or owner}", file=sys.stderr
+            f"no reviewable PRs among the {end} {window} open PRs for {', '.join(args.repos or owners)}",
+            file=sys.stderr,
         )
         if not args.oldest:
             print("use --oldest to sweep the backlog or raise --window to look deeper", file=sys.stderr)
