@@ -141,7 +141,8 @@ def pr_state(cand: Candidate, login: str) -> tuple[str, bool]:
     reviews = run([
         "gh-as-bot",
         "api",
-        f"repos/{cand.repo}/pulls/{cand.number}/reviews",
+        "--paginate",
+        f"repos/{cand.repo}/pulls/{cand.number}/reviews?per_page=100",
         "--jq",
         JQ_REVIEW_STATE.format(login=login),
     ])
@@ -272,6 +273,16 @@ def run_review(
     return review_succeeded(res.returncode, log.read_text(encoding="utf-8", errors="replace")), log
 
 
+def confirm_posted(cand: Candidate, login: str, *, ok: bool, dry_run: bool) -> bool:
+    """Trust the API when a session failed after it had already posted the review."""
+    if ok or dry_run:
+        return ok
+    try:
+        return pr_state(cand, login)[1]
+    except RuntimeError:
+        return False
+
+
 def infer_owner() -> str:
     """Infer the GitHub owner from the current checkout's origin."""
     res = run(["git", "remote", "get-url", "origin"])
@@ -359,6 +370,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"FAILED  {cand.repo}#{cand.number}: {err}", file=sys.stderr)
             failures += 1
             continue
+        ok = confirm_posted(cand, login, ok=ok, dry_run=args.dry_run)
         print(f"{'ok' if ok else 'FAILED'}  {cand.repo}#{cand.number}  log={log}", file=sys.stderr)
         failures += 0 if ok else 1
     print(f"done: {len(candidates) - failures} ok, {failures} failed", file=sys.stderr)

@@ -96,8 +96,10 @@ def test_search_candidates_reports_gh_failure(sut, mocker):
 def test_pr_state_detects_bot_review_on_head(sut, mocker):
     view = MagicMock(returncode=0, stdout="abc123\n", stderr="")
     reviews = MagicMock(returncode=0, stdout="APPROVED\tabc123\nAPPROVED\told\n", stderr="")
-    mocker.patch.object(sut, "run", side_effect=[view, reviews])
+    run = mocker.patch.object(sut, "run", side_effect=[view, reviews])
     assert sut.pr_state(make_candidate(sut), "os-autoinst-review") == ("abc123", True)
+    assert "--paginate" in run.call_args_list[1].args[0]
+    assert "?per_page=100" in run.call_args_list[1].args[0][3]
 
 
 def test_pr_state_ignores_review_on_other_head(sut, mocker):
@@ -319,8 +321,22 @@ def test_main_runs_each_selected_pr(sut, tmp_path, mocker, capsys):
     mocker.patch.object(sut, "search_candidates", return_value=cands)
     mocker.patch.object(sut, "filter_candidates", return_value=cands)
     mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
+    mocker.patch.object(sut, "pr_state", return_value=("h", False))
     run_review = mocker.patch.object(sut, "run_review", side_effect=[(True, Path("/log/1")), (False, Path("/log/2"))])
     code = sut.main(["--owner", "os-autoinst", "--limit", "2", "--log-dir", str(tmp_path / "logs")])
     assert code == 1
     assert run_review.call_count == 2
     assert "done: 1 ok, 1 failed" in capsys.readouterr().err
+
+
+def test_main_counts_a_posted_review_after_a_timeout_as_ok(sut, tmp_path, mocker, capsys):
+    cands = [make_candidate(sut, number=1)]
+    mocker.patch.object(sut, "bot_login", return_value="bot")
+    mocker.patch.object(sut, "search_candidates", return_value=cands)
+    mocker.patch.object(sut, "filter_candidates", return_value=cands)
+    mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
+    mocker.patch.object(sut, "run_review", return_value=(False, Path("/log/1")))
+    mocker.patch.object(sut, "pr_state", return_value=("h", True))
+    code = sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
+    assert code == 0
+    assert "done: 1 ok, 0 failed" in capsys.readouterr().err
