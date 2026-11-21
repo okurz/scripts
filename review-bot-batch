@@ -2,11 +2,14 @@
 """Review many pull requests as the review bot, one isolated session per PR.
 
 Resolves a scope (an org or a list of repositories) with ``gh search prs``, drops drafts,
-bot-authored PRs and PRs the bot already reviewed on the current head, then runs a nested
-review session serially in the matching local checkout. The runner defaults to
-``pi -p "/review-as-bot <url> --post"``; ``--runner opencode`` uses
+bot-authored PRs and PRs the bot already reviewed on the current head, then ranks the rest:
+PRs where the bot already requested changes, then unreviewed PRs with at most one human
+reviewer, then everything else. One review session runs serially in the matching local
+checkout; a PR with an earlier bot block gets a comment instead of a second block. The
+runner defaults to ``pi -p "/review-as-bot <url> --post"``; ``--runner opencode`` uses
 ``opencode run --command review-as-bot`` instead. Posting is the default; ``--dry-run``
-prints each draft instead. A failing PR is reported and the batch continues.
+prints each draft instead. ``--watch --interval N`` repeats the cycle and gives each cycle
+its own log directory. A failing PR is reported and the batch continues.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,9 +32,12 @@ DEFAULT_ROOTS = (Path.home() / "local" / "os-autoinst",)
 DEFAULT_CACHE = Path.home() / ".cache" / "review-bot"
 DEFAULT_LIMIT = 10
 DEFAULT_TIMEOUT = 1200.0
+DEFAULT_INTERVAL = 1200.0
 MAX_SEARCH_LIMIT = 1000
 SEARCH_FIELDS = "number,title,isDraft,author,createdAt,repository"
-JQ_REVIEW_STATE = '.[] | select(.user.login == "{login}") | "\\(.state)\\t\\(.commit_id)"'
+REVIEW_STATES = frozenset({"APPROVED", "CHANGES_REQUESTED", "COMMENTED"})
+REVIEW_ENTRY_FIELDS = 3
+JQ_REVIEWS = '.[] | "\\(.user.login)\\t\\(.state)\\t\\(.commit_id)"'
 
 
 @dataclass(frozen=True)
@@ -53,6 +60,26 @@ class Candidate:
     def slug(self) -> str:
         """Filesystem-safe log name."""
         return f"{self.repo.replace('/', '-')}-{self.number}"
+
+
+@dataclass(frozen=True)
+class PrState:
+    """Review state that decides priority and whether to post at all."""
+
+    head: str
+    reviewed_on_head: bool = False
+    has_bot_review: bool = False
+    has_bot_block: bool = False
+    human_reviewers: int = 0
+
+
+def review_priority(state: PrState) -> int:
+    """Rank eligible PRs: existing block, then unreviewed with little human review, then rest."""
+    if state.has_bot_block:
+        return 0
+    if not state.has_bot_review and state.human_reviewers <= 1:
+        return 1
+    return 2
 
 
 def run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -130,8 +157,8 @@ def candidate_from_json(item: dict[str, Any]) -> Candidate:
     )
 
 
-def pr_state(cand: Candidate, login: str) -> tuple[str, bool]:
-    """Return the PR head sha and whether the bot already reviewed that head."""
+def pr_state(cand: Candidate, login: str) -> PrState:
+    """Read the head sha, the bot's reviews, and the human reviewer count."""
     view = run([
         "gh-as-bot",
         "pr",
@@ -154,13 +181,24 @@ def pr_state(cand: Candidate, login: str) -> tuple[str, bool]:
         "--paginate",
         f"repos/{cand.repo}/pulls/{cand.number}/reviews?per_page=100",
         "--jq",
-        JQ_REVIEW_STATE.format(login=login),
+        JQ_REVIEWS,
     ])
-    reviewed = any(
-        state in {"APPROVED", "CHANGES_REQUESTED"} and commit == head
-        for state, commit in (line.partition("\t")[::2] for line in reviews.stdout.splitlines())
+    if reviews.returncode != 0:
+        msg = f"cannot read reviews of {cand.repo}#{cand.number}: {reviews.stderr.strip()}"
+        raise RuntimeError(msg)
+    entries = [line.split("\t") for line in reviews.stdout.splitlines()]
+    entries = [entry for entry in entries if len(entry) == REVIEW_ENTRY_FIELDS and entry[1] in REVIEW_STATES]
+    bot = [(state, commit) for user, state, commit in entries if user == login]
+    humans = {
+        user for user, _state, _commit in entries if user not in {login, cand.author} and not user.endswith("[bot]")
+    }
+    return PrState(
+        head=head,
+        reviewed_on_head=any(commit == head for _state, commit in bot),
+        has_bot_review=bool(bot),
+        has_bot_block=any(state == "CHANGES_REQUESTED" for state, _commit in bot),
+        human_reviewers=len(humans),
     )
-    return head, reviewed
 
 
 def filter_candidates(
@@ -169,35 +207,41 @@ def filter_candidates(
     *,
     skip_reviewed: bool,
     include_bots: bool = False,
-    limit: int | None = None,
-    state_lookup: Callable[[Candidate, str], tuple[str, bool]] | None = None,
-) -> list[Candidate]:
-    """Drop drafts, bot-authored PRs, and (optionally) PRs already reviewed on head."""
+    state_lookup: Callable[[Candidate, str], PrState] | None = None,
+) -> tuple[list[Candidate], dict[tuple[str, int], PrState]]:
+    """Drop drafts, bot-authored PRs and (optionally) heads the bot already reviewed."""
     if state_lookup is None:
         state_lookup = pr_state
     kept: list[Candidate] = []
+    states: dict[tuple[str, int], PrState] = {}
     for cand in candidates:
         if cand.is_draft or cand.author == login:
             continue
         if not include_bots and cand.author.endswith("[bot]"):
             continue
-        if skip_reviewed:
-            try:
-                reviewed = state_lookup(cand, login)[1]
-            except RuntimeError as err:
-                print(f"skip {cand.repo}#{cand.number}: {err}", file=sys.stderr)
-                continue
-            if reviewed:
-                continue
+        try:
+            state = state_lookup(cand, login)
+        except RuntimeError as err:
+            print(f"skip {cand.repo}#{cand.number}: {err}", file=sys.stderr)
+            continue
+        states[cand.repo, cand.number] = state
+        if skip_reviewed and state.reviewed_on_head:
+            continue
         kept.append(cand)
-        if limit is not None and len(kept) >= limit:
-            break
-    return kept
+    return kept, states
 
 
-def select_candidates(candidates: list[Candidate], limit: int, *, oldest: bool = False) -> list[Candidate]:
-    """Take the newest (or oldest) PRs up to the batch limit."""
+def select_candidates(
+    candidates: list[Candidate],
+    limit: int,
+    *,
+    oldest: bool = False,
+    states: dict[tuple[str, int], PrState] | None = None,
+) -> list[Candidate]:
+    """Take the highest-priority PRs, newest (or oldest) first within a priority bucket."""
     ordered = sorted(candidates, key=lambda cand: cand.created_at, reverse=not oldest)
+    if states:
+        ordered.sort(key=lambda cand: review_priority(states[cand.repo, cand.number]))
     return ordered[:limit]
 
 
@@ -250,10 +294,12 @@ def review_command(
     dry_run: bool,
     model: str = "",
     auto: bool = False,
+    comment_only: bool = False,
     extra_args: list[str] | None = None,
 ) -> list[str]:
     """Build the nested review invocation for one PR with the selected runner."""
     mode = "--dry-run" if dry_run else "--post"
+    suffix = " --comment" if comment_only else ""
     extra = extra_args or []
     if runner == "opencode":
         flags = [*(["--auto"] if auto else []), *(["-m", model] if model else []), *extra]
@@ -265,10 +311,10 @@ def review_command(
             *flags,
             "--command",
             "review-as-bot",
-            f"{cand.url} {mode}",
+            f"{cand.url} {mode}{suffix}",
         ]
     flags = [*(["--model", model] if model else []), *extra]
-    return ["pi", *flags, "-p", f"/review-as-bot {cand.url} {mode}"]
+    return ["pi", *flags, "-p", f"/review-as-bot {cand.url} {mode}{suffix}"]
 
 
 def review_succeeded(returncode: int, output: str) -> bool:
@@ -285,6 +331,7 @@ def run_review(
     dry_run: bool,
     model: str = "",
     auto: bool = False,
+    comment_only: bool = False,
     extra_args: list[str] | None = None,
     log_dir: Path,
     timeout: float,
@@ -293,7 +340,16 @@ def run_review(
     fetch_pr_head(checkout, cand.number)
     log_dir.mkdir(parents=True, exist_ok=True)
     log = log_dir / f"{cand.slug}.log"
-    cmd = review_command(cand, checkout, runner=runner, dry_run=dry_run, model=model, auto=auto, extra_args=extra_args)
+    cmd = review_command(
+        cand,
+        checkout,
+        runner=runner,
+        dry_run=dry_run,
+        model=model,
+        auto=auto,
+        comment_only=comment_only,
+        extra_args=extra_args,
+    )
     timed_out = False
     with log.open("w", encoding="utf-8") as handle:
         try:
@@ -310,13 +366,18 @@ def run_review(
 
 
 def confirm_posted(cand: Candidate, login: str, *, ok: bool, dry_run: bool) -> bool:
-    """Trust the API when a session failed after it had already posted the review."""
-    if ok or dry_run:
+    """Treat the head state from the API as the source of truth, even on exit 0."""
+    if dry_run:
         return ok
     try:
-        return pr_state(cand, login)[1]
+        return pr_state(cand, login).reviewed_on_head
     except RuntimeError:
         return False
+
+
+def cycle_log_dir(base: Path, cycle: int) -> Path:
+    """Return a unique log directory for one watch cycle."""
+    return base / f"{time.strftime('%Y%m%d-%H%M%S')}-{cycle:03d}"
 
 
 def infer_owner() -> str:
@@ -345,7 +406,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--timeout",
         type=float,
         default=DEFAULT_TIMEOUT,
-        help=f"seconds per PR before killing pi (default: {DEFAULT_TIMEOUT:.0f})",
+        help=f"seconds per PR before killing the nested runner (default: {DEFAULT_TIMEOUT:.0f})",
+    )
+    parser.add_argument("--watch", action="store_true", help="run cycles continuously instead of exiting")
+    parser.add_argument(
+        "--interval",
+        type=float,
+        default=DEFAULT_INTERVAL,
+        help=f"seconds between watch cycles (default: {DEFAULT_INTERVAL:.0f})",
     )
     parser.add_argument("--dry-run", action="store_true", help="print each draft instead of posting (default: post)")
     parser.add_argument("--recheck", action="store_true", help="also review PRs the bot already reviewed on head")
@@ -372,27 +440,59 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run the batch and return a shell exit code."""
-    args = parse_args(argv)
-    owners = args.owner or ([infer_owner()] if not args.repos else [])
-    owners = [owner for owner in owners if owner]
+def review_candidate(
+    cand: Candidate,
+    state: PrState,
+    *,
+    args: argparse.Namespace,
+    checkouts: dict[str, Path],
+    log_dir: Path,
+    login: str,
+) -> bool:
+    """Review one candidate and return whether a review exists on its head."""
+    print(f"reviewing {cand.repo}#{cand.number}: {cand.title[:60]}", file=sys.stderr)
+    try:
+        checkout = ensure_checkout(cand.repo, checkouts, DEFAULT_CACHE, allow_clone=not args.no_clone)
+        ok, log = run_review(
+            cand,
+            checkout,
+            runner=args.runner,
+            dry_run=args.dry_run,
+            model=args.model,
+            auto=args.auto,
+            comment_only=state.has_bot_block,
+            extra_args=args.runner_args,
+            log_dir=log_dir,
+            timeout=args.timeout,
+        )
+    except RuntimeError as err:
+        print(f"FAILED  {cand.repo}#{cand.number}: {err}", file=sys.stderr)
+        return False
+    ok = confirm_posted(cand, login, ok=ok, dry_run=args.dry_run)
+    print(f"{'ok' if ok else 'FAILED'}  {cand.repo}#{cand.number}  log={log}", file=sys.stderr)
+    return ok
+
+
+def run_cycle(args: argparse.Namespace) -> int:
+    """Run one search, filter, select and review cycle and return a shell exit code."""
+    owners = [owner for owner in (args.owner or ([infer_owner()] if not args.repos else [])) if owner]
     if not owners and not args.repos:
         print("error: give --owner or -R owner/repo (or run inside a checkout)", file=sys.stderr)
         return 2
     login = bot_login()
     window = search_window(args.limit, args.window)
-    candidates = select_candidates(
-        filter_candidates(
-            search_candidates(owners, args.repos, args.limit, oldest=args.oldest, window=window),
-            login,
-            skip_reviewed=not args.recheck,
-            include_bots=args.include_bots,
-            limit=args.limit,
-        ),
-        args.limit,
-        oldest=args.oldest,
+    try:
+        found = search_candidates(owners, args.repos, args.limit, oldest=args.oldest, window=window)
+    except (RuntimeError, OSError, ValueError) as err:
+        print(f"search failed: {err}", file=sys.stderr)
+        return 1
+    kept, states = filter_candidates(
+        found,
+        login,
+        skip_reviewed=not args.recheck,
+        include_bots=args.include_bots,
     )
+    candidates = select_candidates(kept, args.limit, oldest=args.oldest, states=states)
     if not candidates:
         end = "oldest" if args.oldest else "newest"
         print(
@@ -413,29 +513,42 @@ def main(argv: list[str] | None = None) -> int:
     log_dir = Path(args.log_dir).expanduser() if args.log_dir else DEFAULT_CACHE / "logs"
     failures = 0
     for cand in candidates:
-        print(f"reviewing {cand.repo}#{cand.number}: {cand.title[:60]}", file=sys.stderr)
-        try:
-            checkout = ensure_checkout(cand.repo, checkouts, DEFAULT_CACHE, allow_clone=not args.no_clone)
-            ok, log = run_review(
-                cand,
-                checkout,
-                runner=args.runner,
-                dry_run=args.dry_run,
-                model=args.model,
-                auto=args.auto,
-                extra_args=args.runner_args,
-                log_dir=log_dir,
-                timeout=args.timeout,
-            )
-        except RuntimeError as err:
-            print(f"FAILED  {cand.repo}#{cand.number}: {err}", file=sys.stderr)
+        state = states[cand.repo, cand.number]
+        if not review_candidate(cand, state, args=args, checkouts=checkouts, log_dir=log_dir, login=login):
             failures += 1
-            continue
-        ok = confirm_posted(cand, login, ok=ok, dry_run=args.dry_run)
-        print(f"{'ok' if ok else 'FAILED'}  {cand.repo}#{cand.number}  log={log}", file=sys.stderr)
-        failures += 0 if ok else 1
     print(f"done: {len(candidates) - failures} ok, {failures} failed", file=sys.stderr)
     return 1 if failures else 0
+
+
+def run_watch_cycle(args: argparse.Namespace, base: Path, cycle: int) -> None:
+    """Run one watch cycle with its own log directory, keeping the loop alive on failure."""
+    cycle_args = argparse.Namespace(**vars(args))
+    cycle_args.log_dir = str(cycle_log_dir(base, cycle))
+    try:
+        run_cycle(cycle_args)
+    except (RuntimeError, OSError, ValueError, KeyError) as err:
+        print(f"cycle failed: {err}", file=sys.stderr)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run one batch, or watch cycles with a fresh log directory each time."""
+    args = parse_args(argv)
+    if args.watch and args.list:
+        print("error: --watch and --list cannot be combined", file=sys.stderr)
+        return 2
+    if not args.watch:
+        return run_cycle(args)
+    base = Path(args.log_dir).expanduser() if args.log_dir else DEFAULT_CACHE / "logs"
+    cycle = 0
+    try:
+        while True:
+            run_watch_cycle(args, base, cycle)
+            cycle += 1
+            print(f"next cycle in {args.interval:.0f}s", file=sys.stderr)
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        print("watch stopped", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

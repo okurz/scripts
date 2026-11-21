@@ -109,23 +109,72 @@ def test_search_candidates_reports_gh_failure(sut, mocker):
         sut.search_candidates(["os-autoinst"], [], 1)
 
 
-def test_pr_state_detects_bot_review_on_head(sut, mocker):
+def make_state(sut, *, head="h", **fields: Any):
+    return sut.PrState(head=head, **fields)
+
+
+def test_pr_state_marks_head_review_and_counts_humans(sut, mocker):
     view = MagicMock(returncode=0, stdout="abc123\n", stderr="")
-    reviews = MagicMock(returncode=0, stdout="APPROVED\tabc123\nAPPROVED\told\n", stderr="")
+    reviews = MagicMock(
+        returncode=0,
+        stdout=(
+            "os-autoinst-review\tCOMMENTED\tabc123\n"
+            "os-autoinst-review\tAPPROVED\told\n"
+            "alice\tAPPROVED\tabc123\n"
+            "alice\tCOMMENTED\told\n"
+            "dependabot[bot]\tAPPROVED\tabc123\n"
+        ),
+        stderr="",
+    )
     run = mocker.patch.object(sut, "run", side_effect=[view, reviews])
-    assert sut.pr_state(make_candidate(sut), "os-autoinst-review") == ("abc123", True)
+    state = sut.pr_state(make_candidate(sut), "os-autoinst-review")
+    assert state.reviewed_on_head is True
+    assert state.has_bot_review is True
+    assert state.has_bot_block is False
+    assert state.human_reviewers == 1
     assert "--paginate" in run.call_args_list[1].args[0]
     assert "?per_page=100" in run.call_args_list[1].args[0][3]
 
 
-def test_pr_state_ignores_review_on_other_head(sut, mocker):
+def test_pr_state_detects_stale_block(sut, mocker):
     view = MagicMock(returncode=0, stdout="abc123", stderr="")
-    reviews = MagicMock(returncode=0, stdout="APPROVED\tabc123\nCHANGES_REQUESTED\told\n", stderr="")
+    reviews = MagicMock(returncode=0, stdout="os-autoinst-review\tCHANGES_REQUESTED\told\n", stderr="")
     mocker.patch.object(sut, "run", side_effect=[view, reviews])
-    assert sut.pr_state(make_candidate(sut), "os-autoinst-review") == ("abc123", True)
-    reviews = MagicMock(returncode=0, stdout="APPROVED\told\n", stderr="")
+    state = sut.pr_state(make_candidate(sut), "os-autoinst-review")
+    assert state.reviewed_on_head is False
+    assert state.has_bot_block is True
+
+
+def test_pr_state_detects_block_on_head(sut, mocker):
+    view = MagicMock(returncode=0, stdout="abc123", stderr="")
+    reviews = MagicMock(returncode=0, stdout="os-autoinst-review\tCHANGES_REQUESTED\tabc123\n", stderr="")
     mocker.patch.object(sut, "run", side_effect=[view, reviews])
-    assert sut.pr_state(make_candidate(sut), "os-autoinst-review") == ("abc123", False)
+    state = sut.pr_state(make_candidate(sut), "os-autoinst-review")
+    assert state.reviewed_on_head is True
+    assert state.has_bot_block is True
+
+
+def test_pr_state_raises_when_reviews_cannot_be_read(sut, mocker):
+    view = MagicMock(returncode=0, stdout="abc123", stderr="")
+    reviews = MagicMock(returncode=1, stdout="", stderr="rate limited")
+    mocker.patch.object(sut, "run", side_effect=[view, reviews])
+    with pytest.raises(RuntimeError, match="cannot read reviews of os-autoinst/openQA#1: rate limited"):
+        sut.pr_state(make_candidate(sut), "os-autoinst-review")
+
+
+@pytest.mark.parametrize(
+    ("humans", "expected"), [("alice\tAPPROVED\tabc123", 1), ("alice\tAPPROVED\ta\nbob\tAPPROVED\tb", 2)]
+)
+def test_pr_state_counts_other_humans_only(sut, mocker, humans, expected):
+    view = MagicMock(returncode=0, stdout="abc123", stderr="")
+    reviews = MagicMock(
+        returncode=0,
+        stdout=f"os-autoinst-review\tAPPROVED\tabc123\nokurz\tCOMMENTED\tabc123\n{humans}\n",
+        stderr="",
+    )
+    mocker.patch.object(sut, "run", side_effect=[view, reviews])
+    state = sut.pr_state(make_candidate(sut, author="okurz"), "os-autoinst-review")
+    assert state.human_reviewers == expected
 
 
 def test_filter_candidates_drops_drafts_bot_author_and_reviewed(sut):
@@ -135,20 +184,28 @@ def test_filter_candidates_drops_drafts_bot_author_and_reviewed(sut):
         make_candidate(sut, number=3, draft=True),
         make_candidate(sut, number=4, author="perlpunk"),
     ]
-    kept = sut.filter_candidates(
-        cands, "os-autoinst-review", skip_reviewed=True, state_lookup=lambda c, _l: ("h", c.number == 1)
+    kept, states = sut.filter_candidates(
+        cands,
+        "os-autoinst-review",
+        skip_reviewed=True,
+        state_lookup=lambda c, _l: make_state(sut, reviewed_on_head=c.number == 1),
     )
     assert [c.number for c in kept] == [4]
+    assert set(states) == {("os-autoinst/openQA", 1), ("os-autoinst/openQA", 4)}
 
 
 def test_filter_candidates_skips_dependency_bots_by_default(sut):
     cands = [make_candidate(sut, number=1, author="dependabot[bot]"), make_candidate(sut, number=2)]
-    kept = sut.filter_candidates(
-        cands, "os-autoinst-review", skip_reviewed=False, state_lookup=lambda _c, _l: ("h", False)
+    kept, _ = sut.filter_candidates(
+        cands, "os-autoinst-review", skip_reviewed=False, state_lookup=lambda _c, _l: make_state(sut)
     )
     assert [c.number for c in kept] == [2]
-    kept = sut.filter_candidates(
-        cands, "os-autoinst-review", skip_reviewed=False, include_bots=True, state_lookup=lambda _c, _l: ("h", False)
+    kept, _ = sut.filter_candidates(
+        cands,
+        "os-autoinst-review",
+        skip_reviewed=False,
+        include_bots=True,
+        state_lookup=lambda _c, _l: make_state(sut),
     )
     assert [c.number for c in kept] == [1, 2]
 
@@ -156,36 +213,54 @@ def test_filter_candidates_skips_dependency_bots_by_default(sut):
 def test_filter_candidates_skips_candidate_with_unreadable_state(sut, capsys):
     cands = [make_candidate(sut, number=1), make_candidate(sut, number=2)]
 
-    def lookup(cand: Any, _login: str) -> tuple[str, bool]:
+    def lookup(cand: Any, _login: str) -> Any:
         if cand.number == 1:
             msg = "api down"
             raise RuntimeError(msg)
-        return "h", False
+        return make_state(sut)
 
-    kept = sut.filter_candidates(cands, "os-autoinst-review", skip_reviewed=True, state_lookup=lookup)
+    kept, _ = sut.filter_candidates(cands, "os-autoinst-review", skip_reviewed=True, state_lookup=lookup)
     assert [c.number for c in kept] == [2]
     assert "skip os-autoinst/openQA#1: api down" in capsys.readouterr().err
 
 
 def test_filter_candidates_recheck_keeps_reviewed(sut):
     cand = make_candidate(sut, number=1)
-    kept = sut.filter_candidates(
-        [cand], "os-autoinst-review", skip_reviewed=False, state_lookup=lambda _c, _l: ("h", True)
+    kept, _ = sut.filter_candidates(
+        [cand],
+        "os-autoinst-review",
+        skip_reviewed=False,
+        state_lookup=lambda _c, _l: make_state(sut, reviewed_on_head=True),
     )
     assert kept == [cand]
 
 
-def test_filter_candidates_stops_once_the_batch_is_full(sut):
+def test_filter_candidates_keeps_all_eligible_so_priority_can_sort(sut):
     cands = [make_candidate(sut, number=n) for n in range(1, 6)]
-    calls = []
+    kept, _ = sut.filter_candidates(
+        cands,
+        "os-autoinst-review",
+        skip_reviewed=True,
+        state_lookup=lambda c, _l: make_state(sut, reviewed_on_head=c.number == 1),
+    )
+    assert [c.number for c in kept] == [2, 3, 4, 5]
 
-    def lookup(cand: Any, _login: str) -> tuple[str, bool]:
-        calls.append(cand.number)
-        return "h", cand.number == 1
 
-    kept = sut.filter_candidates(cands, "os-autoinst-review", skip_reviewed=True, limit=2, state_lookup=lookup)
-    assert [c.number for c in kept] == [2, 3]
-    assert calls == [1, 2, 3]
+def test_select_candidates_orders_by_priority_then_date(sut):
+    cands = [
+        make_candidate(sut, number=1, created="2026-02-01"),
+        make_candidate(sut, number=2, created="2026-01-01"),
+        make_candidate(sut, number=3, created="2026-03-01"),
+        make_candidate(sut, number=4, created="2025-12-01"),
+    ]
+    states = {
+        ("os-autoinst/openQA", 1): make_state(sut, has_bot_block=True),
+        ("os-autoinst/openQA", 2): make_state(sut),
+        ("os-autoinst/openQA", 3): make_state(sut, has_bot_review=True),
+        ("os-autoinst/openQA", 4): make_state(sut),
+    }
+    assert [c.number for c in sut.select_candidates(cands, 4, states=states)] == [1, 2, 4, 3]
+    assert [c.number for c in sut.select_candidates(cands, 4, oldest=True, states=states)] == [1, 4, 2, 3]
 
 
 def test_select_candidates_newest_first_and_limited(sut):
@@ -250,6 +325,14 @@ def test_review_command_opencode_without_auto_or_model_keeps_flags_absent(sut, t
         "review-as-bot",
         "https://github.com/os-autoinst/openQA/pull/7 --post",
     ]
+
+
+def test_review_command_comment_only_appends_comment_flag(sut, tmp_path):
+    cand = make_candidate(sut, number=7)
+    assert sut.review_command(cand, tmp_path, dry_run=False, comment_only=True)[-1].endswith("--post --comment")
+    assert sut.review_command(cand, tmp_path, runner="opencode", dry_run=True, comment_only=True)[-1].endswith(
+        "--dry-run --comment"
+    )
 
 
 @pytest.mark.parametrize(
@@ -369,6 +452,8 @@ def test_parse_args_defaults(sut):
     assert not args.model
     assert args.auto is False
     assert args.runner_args == []
+    assert args.watch is False
+    assert args.interval == sut.DEFAULT_INTERVAL
 
 
 def test_parse_args_rejects_unknown_runner(sut):
@@ -400,9 +485,10 @@ def test_parse_args_runner_options_reach_the_command(sut, argv, expected, tmp_pa
 
 def test_main_list_prints_selection_without_reviewing(sut, mocker, capsys):
     cands = [make_candidate(sut, number=1)]
+    states = {("os-autoinst/openQA", 1): make_state(sut)}
     mocker.patch.object(sut, "bot_login", return_value="bot")
     mocker.patch.object(sut, "search_candidates", return_value=cands)
-    mocker.patch.object(sut, "filter_candidates", return_value=cands)
+    mocker.patch.object(sut, "filter_candidates", return_value=(cands, states))
     run_review = mocker.patch.object(sut, "run_review")
     assert sut.main(["--owner", "os-autoinst", "--list"]) == 0
     out = capsys.readouterr().out
@@ -425,13 +511,28 @@ def test_main_requires_a_scope(sut, mocker, capsys):
     assert "give --owner" in capsys.readouterr().err
 
 
+def test_main_reports_a_search_failure_without_a_traceback(sut, mocker, capsys):
+    mocker.patch.object(sut, "bot_login", return_value="bot")
+    mocker.patch.object(sut, "search_candidates", side_effect=RuntimeError("gh down"))
+    assert sut.main(["--owner", "os-autoinst"]) == 1
+    assert "search failed: gh down" in capsys.readouterr().err
+
+
+def states_for(sut, cands, **fields: Any):
+    return {(cand.repo, cand.number): make_state(sut, **fields) for cand in cands}
+
+
 def test_main_runs_each_selected_pr(sut, tmp_path, mocker, capsys):
     cands = [make_candidate(sut, number=1), make_candidate(sut, number=2)]
     mocker.patch.object(sut, "bot_login", return_value="bot")
     mocker.patch.object(sut, "search_candidates", return_value=cands)
-    mocker.patch.object(sut, "filter_candidates", return_value=cands)
+    mocker.patch.object(sut, "filter_candidates", return_value=(cands, states_for(sut, cands)))
     mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
-    mocker.patch.object(sut, "pr_state", return_value=("h", False))
+    mocker.patch.object(
+        sut,
+        "pr_state",
+        side_effect=[make_state(sut, reviewed_on_head=True), make_state(sut)],
+    )
     run_review = mocker.patch.object(sut, "run_review", side_effect=[(True, Path("/log/1")), (False, Path("/log/2"))])
     code = sut.main(["--owner", "os-autoinst", "--limit", "2", "--log-dir", str(tmp_path / "logs")])
     assert code == 1
@@ -443,10 +544,66 @@ def test_main_counts_a_posted_review_after_a_timeout_as_ok(sut, tmp_path, mocker
     cands = [make_candidate(sut, number=1)]
     mocker.patch.object(sut, "bot_login", return_value="bot")
     mocker.patch.object(sut, "search_candidates", return_value=cands)
-    mocker.patch.object(sut, "filter_candidates", return_value=cands)
+    mocker.patch.object(sut, "filter_candidates", return_value=(cands, states_for(sut, cands)))
     mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
     mocker.patch.object(sut, "run_review", return_value=(False, Path("/log/1")))
-    mocker.patch.object(sut, "pr_state", return_value=("h", True))
+    mocker.patch.object(sut, "pr_state", return_value=make_state(sut, reviewed_on_head=True))
     code = sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
     assert code == 0
     assert "done: 1 ok, 0 failed" in capsys.readouterr().err
+
+
+def test_main_marks_an_unposted_session_as_failed(sut, tmp_path, mocker, capsys):
+    cands = [make_candidate(sut, number=1)]
+    mocker.patch.object(sut, "bot_login", return_value="bot")
+    mocker.patch.object(sut, "search_candidates", return_value=cands)
+    mocker.patch.object(sut, "filter_candidates", return_value=(cands, states_for(sut, cands)))
+    mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
+    mocker.patch.object(sut, "run_review", return_value=(True, Path("/log/1")))
+    mocker.patch.object(sut, "pr_state", return_value=make_state(sut))
+    code = sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
+    assert code == 1
+    assert "done: 0 ok, 1 failed" in capsys.readouterr().err
+
+
+def test_main_forces_comment_when_the_bot_already_requested_changes(sut, tmp_path, mocker):
+    cands = [make_candidate(sut, number=1)]
+    states = states_for(sut, cands, has_bot_block=True)
+    mocker.patch.object(sut, "bot_login", return_value="bot")
+    mocker.patch.object(sut, "search_candidates", return_value=cands)
+    mocker.patch.object(sut, "filter_candidates", return_value=(cands, states))
+    mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
+    mocker.patch.object(sut, "pr_state", return_value=make_state(sut, reviewed_on_head=True))
+    run_review = mocker.patch.object(sut, "run_review", return_value=(True, Path("/log/1")))
+    sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
+    assert run_review.call_args.kwargs["comment_only"] is True
+
+
+def test_main_rejects_watch_with_list(sut, capsys):
+    assert sut.main(["--owner", "os-autoinst", "--watch", "--list"]) == 2
+    assert "--watch and --list" in capsys.readouterr().err
+
+
+def test_main_watch_runs_cycles_until_interrupted(sut, mocker):
+    run_cycle = mocker.patch.object(sut, "run_cycle", return_value=0)
+    mocker.patch.object(sut.time, "sleep", side_effect=KeyboardInterrupt)
+    assert sut.main(["--owner", "os-autoinst", "--watch"]) == 130
+    assert run_cycle.call_count == 1
+
+
+def test_main_watch_uses_a_fresh_log_dir_per_cycle(sut, tmp_path, mocker):
+    seen = []
+    mocker.patch.object(sut, "run_cycle", side_effect=lambda args: seen.append(args.log_dir))
+    mocker.patch.object(sut.time, "sleep", side_effect=[None, KeyboardInterrupt])
+    assert sut.main(["--owner", "os-autoinst", "--watch", "--log-dir", str(tmp_path)]) == 130
+    assert len(seen) == 2
+    assert seen[0] != seen[1]
+    assert all(Path(path).parent == tmp_path for path in seen)
+
+
+def test_main_watch_survives_a_failed_cycle(sut, mocker, capsys):
+    run_cycle = mocker.patch.object(sut, "run_cycle", side_effect=[ValueError("bad payload"), 0])
+    mocker.patch.object(sut.time, "sleep", side_effect=[None, KeyboardInterrupt])
+    assert sut.main(["--owner", "os-autoinst", "--watch"]) == 130
+    assert run_cycle.call_count == 2
+    assert "cycle failed: bad payload" in capsys.readouterr().err
