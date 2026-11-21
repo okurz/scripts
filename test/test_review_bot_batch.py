@@ -198,19 +198,57 @@ def test_select_candidates_newest_first_and_limited(sut):
     assert [c.number for c in sut.select_candidates(cands, 2, oldest=True)] == [2, 1]
 
 
-def test_review_command_post_and_dry_run(sut):
+def test_review_command_pi_is_default_and_forwards_model_and_extra_args(sut, tmp_path):
     cand = make_candidate(sut, number=7)
-    assert sut.review_command(cand, dry_run=False, pi_args=[]) == [
+    assert sut.review_command(cand, tmp_path, dry_run=False) == [
         "pi",
         "-p",
         "/review-as-bot https://github.com/os-autoinst/openQA/pull/7 --post",
     ]
-    assert sut.review_command(cand, dry_run=True, pi_args=["--model", "m"]) == [
+    assert sut.review_command(cand, tmp_path, dry_run=True, model="provider/model", extra_args=["--verbose"]) == [
         "pi",
         "--model",
-        "m",
+        "provider/model",
+        "--verbose",
         "-p",
         "/review-as-bot https://github.com/os-autoinst/openQA/pull/7 --dry-run",
+    ]
+
+
+def test_review_command_opencode_uses_command_flag_and_bare_prompt(sut, tmp_path):
+    cand = make_candidate(sut, number=7)
+    assert sut.review_command(
+        cand,
+        tmp_path,
+        runner="opencode",
+        dry_run=True,
+        model="google/gemini-3-flash-preview",
+        auto=True,
+    ) == [
+        "opencode",
+        "run",
+        "--dir",
+        str(tmp_path),
+        "--auto",
+        "-m",
+        "google/gemini-3-flash-preview",
+        "--command",
+        "review-as-bot",
+        "https://github.com/os-autoinst/openQA/pull/7 --dry-run",
+    ]
+
+
+def test_review_command_opencode_without_auto_or_model_keeps_flags_absent(sut, tmp_path):
+    cand = make_candidate(sut, number=7)
+    cmd = sut.review_command(cand, tmp_path, runner="opencode", dry_run=False)
+    assert cmd == [
+        "opencode",
+        "run",
+        "--dir",
+        str(tmp_path),
+        "--command",
+        "review-as-bot",
+        "https://github.com/os-autoinst/openQA/pull/7 --post",
     ]
 
 
@@ -274,20 +312,45 @@ def test_fetch_pr_head_uses_pull_ref_and_reports_failure(sut, tmp_path, mocker):
         sut.fetch_pr_head(tmp_path, 8141)
 
 
+def test_review_command_opencode_resolves_relative_checkout_for_dir(sut, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cmd = sut.review_command(make_candidate(sut, number=7), Path("rel"), runner="opencode", dry_run=False)
+    assert cmd[cmd.index("--dir") + 1] == str(tmp_path / "rel")
+
+
 def test_run_review_writes_log_and_detects_block(sut, tmp_path, mocker):
     mocker.patch.object(sut, "fetch_pr_head")
     mocker.patch.object(sut.subprocess, "run", return_value=MagicMock(returncode=0))
     log = tmp_path / "logs"
-    ok, path = sut.run_review(make_candidate(sut), tmp_path, dry_run=False, pi_args=[], log_dir=log, timeout=5)
+    ok, path = sut.run_review(make_candidate(sut), tmp_path, dry_run=False, log_dir=log, timeout=5)
     assert ok is True
     assert path == log / "os-autoinst-openQA-1.log"
     assert path.exists()
 
 
+def test_run_review_dispatches_to_the_selected_runner(sut, tmp_path, mocker):
+    mocker.patch.object(sut, "fetch_pr_head")
+    proc = mocker.patch.object(sut.subprocess, "run", return_value=MagicMock(returncode=0))
+    sut.run_review(
+        make_candidate(sut),
+        tmp_path,
+        runner="opencode",
+        dry_run=True,
+        model="google/gemini-3-flash-preview",
+        auto=True,
+        log_dir=tmp_path,
+        timeout=5,
+    )
+    cmd = proc.call_args.args[0]
+    assert cmd[:2] == ["opencode", "run"]
+    assert cmd[cmd.index("--command") + 1] == "review-as-bot"
+    assert proc.call_args.kwargs["cwd"] == tmp_path
+
+
 def test_run_review_kills_and_records_a_timeout(sut, tmp_path, mocker):
     mocker.patch.object(sut, "fetch_pr_head")
     mocker.patch.object(sut.subprocess, "run", side_effect=subprocess.TimeoutExpired(["pi"], 5))
-    ok, path = sut.run_review(make_candidate(sut), tmp_path, dry_run=False, pi_args=[], log_dir=tmp_path, timeout=5)
+    ok, path = sut.run_review(make_candidate(sut), tmp_path, dry_run=False, log_dir=tmp_path, timeout=5)
     assert ok is False
     assert "REVIEW FAILED (timeout after 5s)" in path.read_text()
 
@@ -302,6 +365,37 @@ def test_parse_args_defaults(sut):
     assert args.timeout == sut.DEFAULT_TIMEOUT
     assert args.include_bots is False
     assert args.recheck is False
+    assert args.runner == "pi"
+    assert not args.model
+    assert args.auto is False
+    assert args.runner_args == []
+
+
+def test_parse_args_rejects_unknown_runner(sut):
+    with pytest.raises(SystemExit):
+        sut.parse_args(["--runner", "nope"])
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["--runner", "opencode", "--auto"], ["opencode", "run", "--dir"]),
+        (["--pi-arg=--verbose"], ["pi", "--verbose"]),
+        (["--runner-arg=--verbose"], ["pi", "--verbose"]),
+    ],
+)
+def test_parse_args_runner_options_reach_the_command(sut, argv, expected, tmp_path):
+    args = sut.parse_args(["--owner", "os-autoinst", *argv])
+    cmd = sut.review_command(
+        make_candidate(sut, number=1),
+        tmp_path,
+        runner=args.runner,
+        dry_run=False,
+        model=args.model,
+        auto=args.auto,
+        extra_args=args.runner_args,
+    )
+    assert cmd[: len(expected)] == expected
 
 
 def test_main_list_prints_selection_without_reviewing(sut, mocker, capsys):

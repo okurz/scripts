@@ -2,10 +2,11 @@
 """Review many pull requests as the review bot, one isolated session per PR.
 
 Resolves a scope (an org or a list of repositories) with ``gh search prs``, drops drafts,
-bot-authored PRs and PRs the bot already reviewed on the current head, then runs
-``pi -p "/review-as-bot <url> --post"`` serially in the matching local checkout. Posting is
-the default; ``--dry-run`` prints each draft instead. A failing PR is reported and the batch
-continues.
+bot-authored PRs and PRs the bot already reviewed on the current head, then runs a nested
+review session serially in the matching local checkout. The runner defaults to
+``pi -p "/review-as-bot <url> --post"``; ``--runner opencode`` uses
+``opencode run --command review-as-bot`` instead. Posting is the default; ``--dry-run``
+prints each draft instead. A failing PR is reported and the batch continues.
 """
 
 from __future__ import annotations
@@ -241,10 +242,33 @@ def fetch_pr_head(checkout: Path, number: int) -> None:
         raise RuntimeError(msg)
 
 
-def review_command(cand: Candidate, *, dry_run: bool, pi_args: list[str]) -> list[str]:
-    """Build the nested pi invocation for one PR."""
+def review_command(
+    cand: Candidate,
+    checkout: Path,
+    *,
+    runner: str = "pi",
+    dry_run: bool,
+    model: str = "",
+    auto: bool = False,
+    extra_args: list[str] | None = None,
+) -> list[str]:
+    """Build the nested review invocation for one PR with the selected runner."""
     mode = "--dry-run" if dry_run else "--post"
-    return ["pi", *pi_args, "-p", f"/review-as-bot {cand.url} {mode}"]
+    extra = extra_args or []
+    if runner == "opencode":
+        flags = [*(["--auto"] if auto else []), *(["-m", model] if model else []), *extra]
+        return [
+            "opencode",
+            "run",
+            "--dir",
+            str(checkout.resolve()),
+            *flags,
+            "--command",
+            "review-as-bot",
+            f"{cand.url} {mode}",
+        ]
+    flags = [*(["--model", model] if model else []), *extra]
+    return ["pi", *flags, "-p", f"/review-as-bot {cand.url} {mode}"]
 
 
 def review_succeeded(returncode: int, output: str) -> bool:
@@ -257,8 +281,11 @@ def run_review(
     cand: Candidate,
     checkout: Path,
     *,
+    runner: str = "pi",
     dry_run: bool,
-    pi_args: list[str],
+    model: str = "",
+    auto: bool = False,
+    extra_args: list[str] | None = None,
     log_dir: Path,
     timeout: float,
 ) -> tuple[bool, Path]:
@@ -266,7 +293,7 @@ def run_review(
     fetch_pr_head(checkout, cand.number)
     log_dir.mkdir(parents=True, exist_ok=True)
     log = log_dir / f"{cand.slug}.log"
-    cmd = review_command(cand, dry_run=dry_run, pi_args=pi_args)
+    cmd = review_command(cand, checkout, runner=runner, dry_run=dry_run, model=model, auto=auto, extra_args=extra_args)
     timed_out = False
     with log.open("w", encoding="utf-8") as handle:
         try:
@@ -326,8 +353,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-clone", action="store_true", help="skip repos with no local checkout instead of cloning")
     parser.add_argument("--root", action="append", default=[], dest="roots", help="checkout root, repeatable")
     parser.add_argument("--log-dir", default="", help="directory for per-PR logs (default: ~/.cache/review-bot/logs)")
-    parser.add_argument("--model", default="", help="pass --model to the nested pi run")
-    parser.add_argument("--pi-arg", action="append", default=[], dest="pi_args", help="extra nested pi argument")
+    parser.add_argument(
+        "--runner",
+        choices=("pi", "opencode"),
+        default="pi",
+        help="nested review runner (default: pi)",
+    )
+    parser.add_argument("--model", default="", help="model passed to the nested runner (opencode: -m, pi: --model)")
+    parser.add_argument("--auto", action="store_true", help="pass --auto to opencode to auto-approve permissions")
+    parser.add_argument(
+        "--runner-arg",
+        "--pi-arg",
+        action="append",
+        default=[],
+        dest="runner_args",
+        help="extra argument for the nested runner, repeatable; use --runner-arg=--flag for dash values",
+    )
     return parser.parse_args(argv)
 
 
@@ -370,14 +411,21 @@ def main(argv: list[str] | None = None) -> int:
     roots = [Path(root).expanduser() for root in args.roots] or list(DEFAULT_ROOTS)
     checkouts = discover_checkouts(roots)
     log_dir = Path(args.log_dir).expanduser() if args.log_dir else DEFAULT_CACHE / "logs"
-    pi_args = (["--model", args.model] if args.model else []) + args.pi_args
     failures = 0
     for cand in candidates:
         print(f"reviewing {cand.repo}#{cand.number}: {cand.title[:60]}", file=sys.stderr)
         try:
             checkout = ensure_checkout(cand.repo, checkouts, DEFAULT_CACHE, allow_clone=not args.no_clone)
             ok, log = run_review(
-                cand, checkout, dry_run=args.dry_run, pi_args=pi_args, log_dir=log_dir, timeout=args.timeout
+                cand,
+                checkout,
+                runner=args.runner,
+                dry_run=args.dry_run,
+                model=args.model,
+                auto=args.auto,
+                extra_args=args.runner_args,
+                log_dir=log_dir,
+                timeout=args.timeout,
             )
         except RuntimeError as err:
             print(f"FAILED  {cand.repo}#{cand.number}: {err}", file=sys.stderr)
