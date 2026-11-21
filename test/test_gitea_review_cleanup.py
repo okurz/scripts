@@ -23,7 +23,7 @@ def test_select_keys_are_the_documented_values(sut):
 def test_cli_rejects_an_unknown_select(sut):
     result = CliRunner().invoke(sut.app, ["--select", "bogus"])
     assert result.exit_code == 2
-    assert "--select must be one of" in result.output
+    assert "must be one of: drafts, forwarded, both" in result.output
 
 
 def test_cli_dry_run_lists_matches_without_changing_anything(sut, mocker):
