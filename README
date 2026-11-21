@@ -1,11 +1,30 @@
-Just some various scripts.
+# Scripts
 
-## obs-pr-repair
+Personal administration, openQA, OBS/openSUSE, Git, and system utility scripts.
+
+## Overview
+
+This repository contains CLI tools, workflow helpers, and maintenance scripts.
+
+Key areas include:
+
+- **Git and code review automation**: Tools for GitHub/GitLab PR triage, automated bot
+  reviews, cleanup, branch rebasing, and signing (`review-bot-batch`, `gh-pr-triage`,
+  `gh-as-bot`, `glab-as-bot`, `gitea-review-cleanup`, `git-sign-and-push`).
+- **openQA and Open Build Service (OBS)**: Diagnostics and synchronization tools for OBS
+  staging projects, dependency synchronization, and openQA investigations (`obs-pr-repair`,
+  `osc-sync-leap`, `osc-sync-deps`, `osc-get-pr-status`, `suse-qa-sle-etherpad-status`).
+- **System administration and utilities**: Network helpers, backup utilities, desktop
+  adjustments, and hardware monitoring scripts.
+
+## Highlighted tools
+
+### obs-pr-repair
 
 Project-agnostic OBS PR diagnostics and recovery tool for GitHub repositories
 utilizing `.obs/workflows.yml` (e.g. openQA, os-autoinst, os-autoinst-scripts).
 
-### Usage
+#### Usage
 
 ```bash
 # Check current PR project from within git repository checkout:
@@ -27,3 +46,38 @@ obs-pr-repair --repair-branch --pr 7968
 obs-pr-repair --rebuild --pr 7968
 ```
 
+## Development and testing
+
+Python dependencies and virtual environments are managed using [uv](https://github.com/astral-sh/uv).
+
+### Running tests
+
+Run tests and checks via `make`:
+
+```bash
+# Run all unit tests with coverage and static analysis
+make test
+
+# Run unit tests only
+make test-unit
+
+# Run fast unit tests without coverage
+make test-unit-no-coverage
+```
+
+### Static analysis and style checks
+
+```bash
+# Fast style and static analysis (ruff, shellcheck, banned patterns, lockfile)
+make checkstyle
+
+# Run type checker (ty)
+make check-types
+
+# Automatically format code and apply lint fixes
+make tidy
+```
+
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.
