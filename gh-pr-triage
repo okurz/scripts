@@ -138,9 +138,9 @@ def main() -> None:
     repos = args.repos
     if not repos:
         # Try inferring from current directory git remote
-        rc, out, _ = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True)
-        if rc == 0 and out.strip():
-            url = out.strip()
+        res = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True)
+        if res.returncode == 0 and res.stdout.strip():
+            url = res.stdout.strip()
             # Parse github.com:owner/repo.git or https://github.com/owner/repo
             import re
             m = re.search(r"github\.com[:/]([^/]+/[^/.]+)", url)
