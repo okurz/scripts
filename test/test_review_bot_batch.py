@@ -2,6 +2,7 @@
 
 import subprocess
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -155,7 +156,7 @@ def test_filter_candidates_skips_dependency_bots_by_default(sut):
 def test_filter_candidates_skips_candidate_with_unreadable_state(sut, capsys):
     cands = [make_candidate(sut, number=1), make_candidate(sut, number=2)]
 
-    def lookup(cand: object, _login: str) -> tuple[str, bool]:
+    def lookup(cand: Any, _login: str) -> tuple[str, bool]:
         if cand.number == 1:
             msg = "api down"
             raise RuntimeError(msg)
@@ -178,7 +179,7 @@ def test_filter_candidates_stops_once_the_batch_is_full(sut):
     cands = [make_candidate(sut, number=n) for n in range(1, 6)]
     calls = []
 
-    def lookup(cand: object, _login: str) -> tuple[str, bool]:
+    def lookup(cand: Any, _login: str) -> tuple[str, bool]:
         calls.append(cand.number)
         return "h", cand.number == 1
 
