@@ -8,14 +8,78 @@ CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/review-assistant"
 is_write() {
     case "${1:-}" in
         api)
+            is_graphql=0
+            method=""
+            method_set=0
+            has_field=0
+            has_input=0
+            query_seen=0
+            mutation=0
             prev=""
             for arg in "$@"; do
-                if [ "$prev" = "-X" ] || [ "$prev" = "--method" ]; then
-                    [ "$arg" = "GET" ] && return 1
-                    return 0
+                case "$prev" in
+                    -X|--method)
+                        method="$arg"
+                        method_set=1
+                        ;;
+                esac
+                case "$arg" in
+                    -X?*)
+                        method="${arg#-X}"
+                        method="${method#=}"
+                        method_set=1
+                        ;;
+                    --method=*)
+                        method="${arg#--method=}"
+                        method_set=1
+                        ;;
+                    -f|-F|--field|--raw-field)
+                        has_field=1
+                        ;;
+                    -f?*|-F?*|--field=*|--raw-field=*)
+                        has_field=1
+                        ;;
+                    --input|--form)
+                        has_input=1
+                        ;;
+                    --input=*|--form=*)
+                        has_input=1
+                        ;;
+                esac
+                case "$arg" in
+                    *query=*)
+                        query_seen=1
+                        query_value="${arg#*query=}"
+                        case "$query_value" in
+                            @*|-) mutation=1 ;;
+                            *[Mm][Uu][Tt][Aa][Tt][Ii][Oo][Nn]*) mutation=1 ;;
+                        esac
+                        ;;
+                esac
+                if [ "$arg" = "graphql" ]; then
+                    is_graphql=1
                 fi
                 prev="$arg"
             done
+            method_get=0
+            case "$method" in
+                [Gg][Ee][Tt]) method_get=1 ;;
+            esac
+            if [ "$is_graphql" = "1" ]; then
+                if [ "$has_input" = "1" ] || [ "$query_seen" = "0" ] || [ "$mutation" = "1" ]; then
+                    return 0
+                fi
+                return 1
+            fi
+            if [ "$method_set" = "1" ]; then
+                if [ "$method_get" = "1" ] && [ "$has_input" = "0" ]; then
+                    return 1
+                fi
+                return 0
+            fi
+            if [ "$has_field" = "1" ] || [ "$has_input" = "1" ]; then
+                return 0
+            fi
             return 1
             ;;
         mr)

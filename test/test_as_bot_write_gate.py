@@ -15,11 +15,30 @@ GH_READS = [
     ["pr", "comment", "list", "1"],
     ["pr", "review", "list", "1"],
     ["api", "repos/os-autoinst/openQA/pulls/1/reviews", "--jq", ".[-1].state"],
+    ["api", "repos/os-autoinst/openQA/pulls/1/reviews", "-X", "GET", "-f", "per_page=100"],
+    ["api", "repos/os-autoinst/openQA/pulls/1/reviews", "-XGET"],
+    ["api", "repos/os-autoinst/openQA/pulls/1/reviews", "--method", "GET"],
+    ["api", "repos/os-autoinst/openQA/pulls/1/reviews", "--method=GET"],
+    ["api", "graphql", "-f", "query=query { viewer { login } }"],
+    ["api", "graphql", "--field", "query=query { viewer { login } }"],
 ]
 
 GH_WRITES = [
     ["pr", "review", "1", "--approve", "--body", "x"],
     ["api", "repos/os-autoinst/openQA/pulls/1/reviews", "-X", "POST", "-f", "event=APPROVE"],
+    ["api", "repos/os-autoinst/openQA/pulls/1/reviews", "-f", "event=APPROVE"],
+    ["api", "repos/os-autoinst/openQA/pulls/1/reviews", "--raw-field", "body=x"],
+    ["api", "repos/os-autoinst/openQA/pulls/1/reviews", "-F", "body=x"],
+    ["api", "repos/os-autoinst/openQA/pulls/1/reviews", "-fbody=x"],
+    ["api", "repos/os-autoinst/openQA/pulls/1/reviews", "-XPOST"],
+    ["api", "repos/os-autoinst/openQA/pulls/1/reviews", "--method=POST"],
+    ["api", "repos/os-autoinst/openQA/pulls/1/reviews", "-X", "DELETE"],
+    ["api", "repos/os-autoinst/openQA/pulls/1/reviews", "--input", "body.json"],
+    ["api", "repos/os-autoinst/openQA/pulls/1/reviews", "--form", "file=@x"],
+    ["api", "graphql", "-f", "query=mutation { addComment(input:{}) { clientMutationId } }"],
+    ["api", "graphql", "--input", "mutation.json"],
+    ["api", "graphql", "-f", "query=@mutation.graphql"],
+    ["api", "graphql", "-f", "query=-"],
     ["pr", "comment", "1", "-b", "x"],
     ["pr", "merge", "1"],
 ]
@@ -30,12 +49,26 @@ GLAB_READS = [
     ["mr", "diff", "1"],
     ["mr", "note", "list", "1"],
     ["api", "projects/openqa%2Fsalt-states-openqa/merge_requests", "-X", "GET"],
+    ["api", "projects/openqa%2Fsalt-states-openqa/merge_requests", "-X", "GET", "-f", "per_page=100"],
+    ["api", "projects/openqa%2Fsalt-states-openqa/merge_requests", "-XGET"],
+    ["api", "projects/openqa%2Fsalt-states-openqa/merge_requests", "--method", "GET"],
+    ["api", "projects/openqa%2Fsalt-states-openqa/merge_requests", "--method=GET"],
+    ["api", "graphql", "-f", "query=query { currentUser { username } }"],
 ]
 
 GLAB_WRITES = [
     ["mr", "approve", "1"],
     ["mr", "note", "create", "1", "-m", "x"],
     ["api", "projects/openqa%2Fsalt-states-openqa/merge_requests/1/approve", "-X", "POST"],
+    ["api", "projects/openqa%2Fsalt-states-openqa/merge_requests", "-f", "title=x"],
+    ["api", "projects/openqa%2Fsalt-states-openqa/merge_requests", "--raw-field", "title=x"],
+    ["api", "projects/openqa%2Fsalt-states-openqa/merge_requests", "--field", "title=x"],
+    ["api", "projects/openqa%2Fsalt-states-openqa/merge_requests", "-XPOST"],
+    ["api", "projects/openqa%2Fsalt-states-openqa/merge_requests", "--method=POST"],
+    ["api", "projects/openqa%2Fsalt-states-openqa/merge_requests", "--input", "body.json"],
+    ["api", "projects/openqa%2Fsalt-states-openqa/merge_requests", "--form", "file=@x"],
+    ["api", "graphql", "-f", "query=mutation { addNote(input:{}) { clientMutationId } }"],
+    ["api", "graphql", "-f", "query=@mutation.graphql"],
 ]
 
 
