@@ -21,6 +21,7 @@ GH_READS = [
     ["api", "repos/os-autoinst/openQA/pulls/1/reviews", "--method=GET"],
     ["api", "graphql", "-f", "query=query { viewer { login } }"],
     ["api", "graphql", "--field", "query=query { viewer { login } }"],
+    ["search", "prs", "--owner", "os-autoinst", "--json", "number"],
 ]
 
 GH_WRITES = [

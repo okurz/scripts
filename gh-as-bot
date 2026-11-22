@@ -91,7 +91,7 @@ is_write() {
             esac
             return 0
             ;;
-        auth|help|version|completion|status) return 1 ;;
+        auth|help|version|completion|status|search) return 1 ;;
     esac
     return 0
 }
