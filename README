@@ -10,7 +10,9 @@ Key areas include:
 
 - **Git and code review automation**: Tools for GitHub/GitLab PR triage, automated bot
   reviews, cleanup, branch rebasing, and signing (`review-bot-batch`, `gh-pr-triage`,
-  `gh-as-bot`, `glab-as-bot`, `gitea-review-cleanup`, `git-sign-and-push`).
+  `gh-as-bot`, `glab-as-bot`, `gitea-review-cleanup`, `git-sign-and-push`). `gh-as-bot` and
+  `glab-as-bot` refuse forge writes unless `REVIEW_BOT_POST=1` is set; `review-bot-batch`
+  sets it for live runs and leaves it unset for `--dry-run`.
 - **openQA and Open Build Service (OBS)**: Diagnostics and synchronization tools for OBS
   staging projects, dependency synchronization, and openQA investigations (`obs-pr-repair`,
   `osc-sync-leap`, `osc-sync-deps`, `osc-get-pr-status`, `suse-qa-sle-etherpad-status`).

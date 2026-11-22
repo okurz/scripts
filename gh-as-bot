@@ -5,6 +5,38 @@ CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/review-assistant"
 OS_AUTOINST_ENV="$CONF_DIR/write.env"
 CLASSIC_ENV="$CONF_DIR/write-classic-public_repo.env"
 
+# The write gate lives in this wrapper, not in an agent harness, so pi, opencode and a human shell
+# all hit the same wall. Reads pass; anything that changes forge state needs REVIEW_BOT_POST=1.
+is_write() {
+    case "${1:-}" in
+        api)
+            prev=""
+            for arg in "$@"; do
+                if [ "$prev" = "-X" ] || [ "$prev" = "--method" ]; then
+                    [ "$arg" = "GET" ] && return 1
+                    return 0
+                fi
+                prev="$arg"
+            done
+            return 1
+            ;;
+        pr)
+            case "${2:-}" in
+                view|diff|checks|list|status) return 1 ;;
+                comment|review) [ "${3:-}" = "list" ] && return 1 ;;
+            esac
+            return 0
+            ;;
+        auth|help|version|completion|status) return 1 ;;
+    esac
+    return 0
+}
+
+if [ "${REVIEW_BOT_POST:-}" != "1" ] && is_write "$@"; then
+    echo "gh-as-bot: write refused ($*): set REVIEW_BOT_POST=1 to allow bot writes" >&2
+    exit 1
+fi
+
 # Resolve target repository from arguments (e.g. -R owner/repo, owner/repo#PR, or full GitHub URL)
 target=""
 for arg in "$@"; do

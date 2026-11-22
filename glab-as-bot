@@ -3,6 +3,38 @@ set -eu
 
 CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/review-assistant"
 
+# The write gate lives in this wrapper, not in an agent harness, so pi, opencode and a human shell
+# all hit the same wall. Reads pass; anything that changes forge state needs REVIEW_BOT_POST=1.
+is_write() {
+    case "${1:-}" in
+        api)
+            prev=""
+            for arg in "$@"; do
+                if [ "$prev" = "-X" ] || [ "$prev" = "--method" ]; then
+                    [ "$arg" = "GET" ] && return 1
+                    return 0
+                fi
+                prev="$arg"
+            done
+            return 1
+            ;;
+        mr)
+            case "${2:-}" in
+                view|list|status|diff|checkout) return 1 ;;
+                note) [ "${3:-}" = "list" ] && return 1 ;;
+            esac
+            return 0
+            ;;
+        help|version|completion) return 1 ;;
+    esac
+    return 0
+}
+
+if [ "${REVIEW_BOT_POST:-}" != "1" ] && is_write "$@"; then
+    echo "glab-as-bot: write refused ($*): set REVIEW_BOT_POST=1 to allow bot writes" >&2
+    exit 1
+fi
+
 # Resolve target host from arguments (e.g. MR URL, repo path, or host flag)
 host=""
 for arg in "$@"; do
