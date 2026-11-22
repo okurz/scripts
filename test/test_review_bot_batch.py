@@ -607,3 +607,22 @@ def test_main_watch_survives_a_failed_cycle(sut, mocker, capsys):
     assert sut.main(["--owner", "os-autoinst", "--watch"]) == 130
     assert run_cycle.call_count == 2
     assert "cycle failed: bad payload" in capsys.readouterr().err
+
+
+def test_runner_env_grants_post_for_live_runs(sut, monkeypatch):
+    monkeypatch.delenv("REVIEW_BOT_POST", raising=False)
+    assert sut.runner_env(dry_run=False)["REVIEW_BOT_POST"] == "1"
+
+
+def test_runner_env_keeps_the_write_gate_closed_for_dry_runs(sut, monkeypatch):
+    monkeypatch.setenv("REVIEW_BOT_POST", "1")
+    assert "REVIEW_BOT_POST" not in sut.runner_env(dry_run=True)
+
+
+def test_run_review_passes_post_env_only_for_live_runs(sut, tmp_path, mocker):
+    mocker.patch.object(sut, "fetch_pr_head")
+    proc = mocker.patch.object(sut.subprocess, "run", return_value=MagicMock(returncode=0))
+    sut.run_review(make_candidate(sut), tmp_path, dry_run=True, log_dir=tmp_path, timeout=5)
+    assert "REVIEW_BOT_POST" not in proc.call_args.kwargs["env"]
+    sut.run_review(make_candidate(sut), tmp_path, dry_run=False, log_dir=tmp_path, timeout=5)
+    assert proc.call_args.kwargs["env"]["REVIEW_BOT_POST"] == "1"

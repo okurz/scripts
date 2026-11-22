@@ -8,7 +8,8 @@ reviewer, then everything else. One review session runs serially in the matching
 checkout; a PR with an earlier bot block gets a comment instead of a second block. The
 runner defaults to ``pi -p "/review-as-bot <url> --post"``; ``--runner opencode`` uses
 ``opencode run --command review-as-bot`` instead. Posting is the default; ``--dry-run``
-prints each draft instead. ``--watch --interval N`` repeats the cycle and gives each cycle
+prints each draft instead and leaves ``REVIEW_BOT_POST`` unset so the as-bot wrappers refuse
+writes. ``--watch --interval N`` repeats the cycle and gives each cycle
 its own log directory. A failing PR is reported and the batch continues.
 """
 
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -317,6 +319,15 @@ def review_command(
     return ["pi", *flags, "-p", f"/review-as-bot {cand.url} {mode}{suffix}"]
 
 
+def runner_env(*, dry_run: bool) -> dict[str, str]:
+    """Environment for the nested runner; the as-bot wrappers refuse writes without REVIEW_BOT_POST."""
+    env = dict(os.environ)
+    env.pop("REVIEW_BOT_POST", None)
+    if not dry_run:
+        env["REVIEW_BOT_POST"] = "1"
+    return env
+
+
 def review_succeeded(returncode: int, output: str) -> bool:
     """Treat a claimed block or a failed run as unsuccessful even on exit 0."""
     blocked = "--- REVIEW FAILED" in output or "--- REVIEW BLOCKED" in output
@@ -354,7 +365,13 @@ def run_review(
     with log.open("w", encoding="utf-8") as handle:
         try:
             res = subprocess.run(
-                cmd, cwd=checkout, stdout=handle, stderr=subprocess.STDOUT, check=False, timeout=timeout
+                cmd,
+                cwd=checkout,
+                env=runner_env(dry_run=dry_run),
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                check=False,
+                timeout=timeout,
             )
         except subprocess.TimeoutExpired:
             timed_out = True
