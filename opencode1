@@ -1,0 +1,9 @@
+#!/bin/sh
+# OpenCode V1, frozen legacy sandbox: own prefixes so it cannot touch the V2 primary tree.
+set -eu
+export XDG_CONFIG_HOME="$HOME/.config/opencode-1"
+export XDG_DATA_HOME="$HOME/.local/share/opencode-1"
+export XDG_CACHE_HOME="$HOME/.cache/opencode-1"
+export XDG_STATE_HOME="$HOME/.local/state/opencode-1"
+export OPENCODE_DISABLE_AUTOUPDATE=1
+exec "$HOME/.local/opencode1/bin/opencode" "$@"

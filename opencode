@@ -1,0 +1,9 @@
+#!/bin/sh
+# OpenCode V2, primary setup: default dirs (~/.config/opencode, ~/.local/share/opencode).
+# V1 lives in the frozen legacy sandbox behind ~/bin/opencode1.
+set -eu
+# ~/.profile exports a stale GEMINI_API_KEY; V2 would use it as the Google API key and
+# bypass the gemini-auth OAuth flat rate, so it must be gone before the service starts.
+unset GEMINI_API_KEY
+export OPENCODE_DISABLE_AUTOUPDATE=1
+exec "$HOME/.local/opencode2/bin/opencode2" "$@"
