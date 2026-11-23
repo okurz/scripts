@@ -562,6 +562,11 @@ def run_watch_cycle(args: argparse.Namespace, base: Path, cycle: int) -> None:
         print(f"cycle failed: {err}", file=sys.stderr)
 
 
+def pause(seconds: float) -> None:
+    """Wait between watch cycles; the seam keeps a test off the shared clock."""
+    time.sleep(seconds)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run one batch, or watch cycles with a fresh log directory each time."""
     args = parse_args(argv)
@@ -577,7 +582,7 @@ def main(argv: list[str] | None = None) -> int:
             run_watch_cycle(args, base, cycle)
             cycle += 1
             print(f"next cycle in {args.interval:.0f}s", file=sys.stderr)
-            time.sleep(args.interval)
+            pause(args.interval)
     except KeyboardInterrupt:
         print("watch stopped", file=sys.stderr)
         return 130

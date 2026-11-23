@@ -624,7 +624,7 @@ def test_main_rejects_watch_with_list(sut, capsys):
 
 def test_main_watch_runs_cycles_until_interrupted(sut, mocker):
     run_cycle = mocker.patch.object(sut, "run_cycle", return_value=0)
-    mocker.patch.object(sut.time, "sleep", side_effect=KeyboardInterrupt)
+    mocker.patch.object(sut, "pause", side_effect=KeyboardInterrupt)
     assert sut.main(["--owner", "os-autoinst", "--watch"]) == 130
     assert run_cycle.call_count == 1
 
@@ -632,7 +632,7 @@ def test_main_watch_runs_cycles_until_interrupted(sut, mocker):
 def test_main_watch_uses_a_fresh_log_dir_per_cycle(sut, tmp_path, mocker):
     seen = []
     mocker.patch.object(sut, "run_cycle", side_effect=lambda args: seen.append(args.log_dir))
-    mocker.patch.object(sut.time, "sleep", side_effect=[None, KeyboardInterrupt])
+    mocker.patch.object(sut, "pause", side_effect=[None, KeyboardInterrupt])
     assert sut.main(["--owner", "os-autoinst", "--watch", "--log-dir", str(tmp_path)]) == 130
     assert len(seen) == 2
     assert seen[0] != seen[1]
@@ -641,7 +641,7 @@ def test_main_watch_uses_a_fresh_log_dir_per_cycle(sut, tmp_path, mocker):
 
 def test_main_watch_survives_a_failed_cycle(sut, mocker, capsys):
     run_cycle = mocker.patch.object(sut, "run_cycle", side_effect=[ValueError("bad payload"), 0])
-    mocker.patch.object(sut.time, "sleep", side_effect=[None, KeyboardInterrupt])
+    mocker.patch.object(sut, "pause", side_effect=[None, KeyboardInterrupt])
     assert sut.main(["--owner", "os-autoinst", "--watch"]) == 130
     assert run_cycle.call_count == 2
     assert "cycle failed: bad payload" in capsys.readouterr().err
