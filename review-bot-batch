@@ -6,7 +6,9 @@ bot-authored PRs and PRs the bot already reviewed on the current head, then rank
 PRs the bot currently blocks, then unreviewed PRs with at most one human reviewer, then
 everything else. ``--only-blocked`` narrows the batch to the blocked PRs alone. One review
 session runs serially in the matching local checkout; a blocked PR gets a comment instead of
-a second block. The runner defaults to ``pi -p "/review-as-bot <url> --post"``; ``--runner opencode`` uses
+a second block. A session that finds nothing new posts no review and ends with ``--- REVIEW
+SKIPPED``; its head is recorded in ``<cache>/skipped.json`` so a later cycle does not ask again.
+The runner defaults to ``pi -p "/review-as-bot <url> --post"``; ``--runner opencode`` uses
 ``opencode run --command review-as-bot`` instead. Posting is the default; ``--dry-run``
 prints each draft instead and leaves ``REVIEW_BOT_POST`` unset so the as-bot wrappers refuse
 writes. ``--watch --interval N`` repeats the cycle and gives each cycle
@@ -40,6 +42,8 @@ SEARCH_FIELDS = "number,title,isDraft,author,createdAt,repository"
 REVIEW_STATES = frozenset({"APPROVED", "CHANGES_REQUESTED", "COMMENTED"})
 REVIEW_ENTRY_FIELDS = 3
 JQ_REVIEWS = '.[] | "\\(.user.login)\\t\\(.state)\\t\\(.commit_id)"'
+SKIP_MARKER = "--- REVIEW SKIPPED"
+SKIP_CACHE = DEFAULT_CACHE / "skipped.json"
 
 
 @dataclass(frozen=True)
@@ -73,6 +77,15 @@ class PrState:
     has_bot_review: bool = False
     has_bot_block: bool = False
     human_reviewers: int = 0
+
+
+@dataclass(frozen=True)
+class ReviewOutcome:
+    """One nested session: posted or approved, deliberately skipped, or failed."""
+
+    ok: bool
+    skipped: bool
+    log: Path
 
 
 def still_blocked(bot: list[tuple[str, str]]) -> bool:
@@ -209,6 +222,34 @@ def pr_state(cand: Candidate, login: str) -> PrState:
     )
 
 
+def skip_key(repo: str, number: int) -> str:
+    """Return the cache key that records a deliberately skipped PR."""
+    return f"{repo}#{number}"
+
+
+def load_skips(path: Path) -> dict[str, str]:
+    """Read the recorded skip heads, treating a missing or malformed cache as empty."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {key: head for key, head in data.items() if isinstance(head, str)}
+
+
+def save_skips(path: Path, skips: dict[str, str]) -> None:
+    """Persist the skip heads so the next cycle does not ask the same question."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(skips, indent=0, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def record_skip(path: Path, cand: Candidate, state: PrState, skips: dict[str, str]) -> None:
+    """Remember that this head needs no review; a new head makes the PR eligible again."""
+    skips[skip_key(cand.repo, cand.number)] = state.head
+    save_skips(path, skips)
+
+
 def filter_candidates(
     candidates: list[Candidate],
     login: str,
@@ -216,9 +257,11 @@ def filter_candidates(
     skip_reviewed: bool,
     include_bots: bool = False,
     only_blocked: bool = False,
+    skips: dict[str, str] | None = None,
     state_lookup: Callable[[Candidate, str], PrState] | None = None,
 ) -> tuple[list[Candidate], dict[tuple[str, int], PrState]]:
-    """Drop drafts, bot-authored PRs, unblocked PRs and (optionally) heads the bot already reviewed."""
+    """Drop drafts, bot-authored PRs, unblocked PRs and (optionally) heads already handled."""
+    skips = skips or {}
     if state_lookup is None:
         state_lookup = pr_state
     kept: list[Candidate] = []
@@ -236,7 +279,7 @@ def filter_candidates(
         states[cand.repo, cand.number] = state
         if only_blocked and not state.has_bot_block:
             continue
-        if skip_reviewed and state.reviewed_on_head:
+        if skip_reviewed and (state.reviewed_on_head or skips.get(skip_key(cand.repo, cand.number)) == state.head):
             continue
         kept.append(cand)
     return kept, states
@@ -343,6 +386,11 @@ def review_succeeded(returncode: int, output: str) -> bool:
     return returncode == 0 and not blocked
 
 
+def review_skipped(output: str) -> bool:
+    """Return whether the session had nothing new and posted no review on purpose."""
+    return SKIP_MARKER in output
+
+
 def run_review(
     cand: Candidate,
     checkout: Path,
@@ -355,8 +403,8 @@ def run_review(
     extra_args: list[str] | None = None,
     log_dir: Path,
     timeout: float,
-) -> tuple[bool, Path]:
-    """Run one review session, tee its output to a log, and return (ok, log path)."""
+) -> ReviewOutcome:
+    """Run one review session and tee its output to a log."""
     fetch_pr_head(checkout, cand.number)
     log_dir.mkdir(parents=True, exist_ok=True)
     log = log_dir / f"{cand.slug}.log"
@@ -387,14 +435,15 @@ def run_review(
     if timed_out:
         with log.open("a", encoding="utf-8") as handle:
             handle.write(f"\n--- REVIEW FAILED (timeout after {timeout:.0f}s) ---\n")
-        return False, log
-    return review_succeeded(res.returncode, log.read_text(encoding="utf-8", errors="replace")), log
+        return ReviewOutcome(ok=False, skipped=False, log=log)
+    output = log.read_text(encoding="utf-8", errors="replace")
+    return ReviewOutcome(ok=review_succeeded(res.returncode, output), skipped=review_skipped(output), log=log)
 
 
-def confirm_posted(cand: Candidate, login: str, *, ok: bool, dry_run: bool) -> bool:
+def confirm_posted(cand: Candidate, login: str, outcome: ReviewOutcome, *, dry_run: bool) -> bool:
     """Treat the head state from the API as the source of truth, even on exit 0."""
-    if dry_run:
-        return ok
+    if outcome.skipped or dry_run:
+        return outcome.ok
     try:
         return pr_state(cand, login).reviewed_on_head
     except RuntimeError:
@@ -442,7 +491,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"seconds between watch cycles (default: {DEFAULT_INTERVAL:.0f})",
     )
     parser.add_argument("--dry-run", action="store_true", help="print each draft instead of posting (default: post)")
-    parser.add_argument("--recheck", action="store_true", help="also review PRs the bot already reviewed on head")
+    parser.add_argument(
+        "--recheck",
+        action="store_true",
+        help="also review heads the bot already reviewed or skipped as having nothing new",
+    )
     parser.add_argument(
         "--only-blocked",
         action="store_true",
@@ -479,12 +532,14 @@ def review_candidate(
     checkouts: dict[str, Path],
     log_dir: Path,
     login: str,
+    skips: dict[str, str],
+    skip_cache: Path,
 ) -> bool:
-    """Review one candidate and return whether a review exists on its head."""
+    """Review one candidate and return whether its head now needs no further review."""
     print(f"reviewing {cand.repo}#{cand.number}: {cand.title[:60]}", file=sys.stderr)
     try:
         checkout = ensure_checkout(cand.repo, checkouts, DEFAULT_CACHE, allow_clone=not args.no_clone)
-        ok, log = run_review(
+        outcome = run_review(
             cand,
             checkout,
             runner=args.runner,
@@ -499,8 +554,11 @@ def review_candidate(
     except RuntimeError as err:
         print(f"FAILED  {cand.repo}#{cand.number}: {err}", file=sys.stderr)
         return False
-    ok = confirm_posted(cand, login, ok=ok, dry_run=args.dry_run)
-    print(f"{'ok' if ok else 'FAILED'}  {cand.repo}#{cand.number}  log={log}", file=sys.stderr)
+    if outcome.skipped:
+        record_skip(skip_cache, cand, state, skips)
+    ok = confirm_posted(cand, login, outcome, dry_run=args.dry_run)
+    status = "skip" if outcome.skipped else ("ok" if ok else "FAILED")
+    print(f"{status}  {cand.repo}#{cand.number}  log={outcome.log}", file=sys.stderr)
     return ok
 
 
@@ -517,12 +575,14 @@ def run_cycle(args: argparse.Namespace) -> int:
     except (RuntimeError, OSError, ValueError) as err:
         print(f"search failed: {err}", file=sys.stderr)
         return 1
+    skips = load_skips(SKIP_CACHE)
     kept, states = filter_candidates(
         found,
         login,
         skip_reviewed=not args.recheck,
         include_bots=args.include_bots,
         only_blocked=args.only_blocked,
+        skips=skips,
     )
     candidates = select_candidates(kept, args.limit, oldest=args.oldest, states=states)
     if not candidates:
@@ -546,7 +606,16 @@ def run_cycle(args: argparse.Namespace) -> int:
     failures = 0
     for cand in candidates:
         state = states[cand.repo, cand.number]
-        if not review_candidate(cand, state, args=args, checkouts=checkouts, log_dir=log_dir, login=login):
+        if not review_candidate(
+            cand,
+            state,
+            args=args,
+            checkouts=checkouts,
+            log_dir=log_dir,
+            login=login,
+            skips=skips,
+            skip_cache=SKIP_CACHE,
+        ):
             failures += 1
     print(f"done: {len(candidates) - failures} ok, {failures} failed", file=sys.stderr)
     return 1 if failures else 0

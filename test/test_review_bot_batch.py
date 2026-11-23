@@ -113,6 +113,15 @@ def make_state(sut, *, head="h", **fields: Any):
     return sut.PrState(head=head, **fields)
 
 
+def make_outcome(sut, *, ok: bool, skipped: bool = False, log: str = "/log/1"):
+    return sut.ReviewOutcome(ok=ok, skipped=skipped, log=Path(log))
+
+
+def write_log(handle: Any, text: str) -> MagicMock:
+    handle.write(text)
+    return MagicMock(returncode=0)
+
+
 def test_pr_state_marks_head_review_and_counts_humans(sut, mocker):
     view = MagicMock(returncode=0, stdout="abc123\n", stderr="")
     reviews = MagicMock(
@@ -272,6 +281,42 @@ def test_filter_candidates_recheck_keeps_reviewed(sut):
     assert kept == [cand]
 
 
+def test_filter_candidates_drops_a_head_the_bot_deliberately_skipped(sut):
+    cand = make_candidate(sut, number=1)
+    kept, _ = sut.filter_candidates(
+        [cand],
+        "os-autoinst-review",
+        skip_reviewed=True,
+        skips={"os-autoinst/openQA#1": "h"},
+        state_lookup=lambda _c, _l: make_state(sut, head="h"),
+    )
+    assert kept == []
+
+
+def test_filter_candidates_keeps_a_skipped_pr_after_a_new_push(sut):
+    cand = make_candidate(sut, number=1)
+    kept, _ = sut.filter_candidates(
+        [cand],
+        "os-autoinst-review",
+        skip_reviewed=True,
+        skips={"os-autoinst/openQA#1": "old"},
+        state_lookup=lambda _c, _l: make_state(sut, head="new"),
+    )
+    assert kept == [cand]
+
+
+def test_filter_candidates_recheck_keeps_a_skipped_pr(sut):
+    cand = make_candidate(sut, number=1)
+    kept, _ = sut.filter_candidates(
+        [cand],
+        "os-autoinst-review",
+        skip_reviewed=False,
+        skips={"os-autoinst/openQA#1": "h"},
+        state_lookup=lambda _c, _l: make_state(sut, head="h"),
+    )
+    assert kept == [cand]
+
+
 def test_filter_candidates_keeps_all_eligible_so_priority_can_sort(sut):
     cands = [make_candidate(sut, number=n) for n in range(1, 6)]
     kept, _ = sut.filter_candidates(
@@ -385,6 +430,39 @@ def test_review_succeeded(sut, returncode, output, expected):
     assert sut.review_succeeded(returncode, output) is expected
 
 
+def test_review_skipped_detects_the_marker(sut):
+    assert sut.review_skipped("--- REVIEW SKIPPED (github o/r#1, nothing new) ---") is True
+    assert sut.review_skipped("Verdict: APPROVE") is False
+
+
+def test_skip_cache_round_trip_and_malformed_cache(sut, tmp_path):
+    cache = tmp_path / "nested" / "skipped.json"
+    assert sut.load_skips(cache) == {}
+    sut.save_skips(cache, {"o/r#1": "abc"})
+    assert sut.load_skips(cache) == {"o/r#1": "abc"}
+    cache.write_text("[1, 2]")
+    assert sut.load_skips(cache) == {}
+    cache.write_text("{not json")
+    assert sut.load_skips(cache) == {}
+
+
+def test_record_skip_keys_the_head_by_repo_and_number(sut, tmp_path):
+    cache = tmp_path / "skipped.json"
+    skips: dict[str, str] = {}
+    sut.record_skip(cache, make_candidate(sut, number=7, repo="o/r"), make_state(sut, head="abc"), skips)
+    assert sut.load_skips(cache) == {"o/r#7": "abc"}
+
+
+def test_confirm_posted_accepts_a_skip_without_a_review(sut, mocker):
+    mocker.patch.object(sut, "pr_state", side_effect=AssertionError("a skip needs no API lookup"))
+    assert sut.confirm_posted(make_candidate(sut), "bot", make_outcome(sut, ok=True, skipped=True), dry_run=False)
+
+
+def test_confirm_posted_rejects_a_skip_that_failed(sut, mocker):
+    mocker.patch.object(sut, "pr_state", side_effect=AssertionError("a skip needs no API lookup"))
+    assert not sut.confirm_posted(make_candidate(sut), "bot", make_outcome(sut, ok=False, skipped=True), dry_run=False)
+
+
 def test_discover_checkouts_maps_only_github_remotes(sut, tmp_path, mocker):
     first = tmp_path / "openQA-a"
     second = tmp_path / "openQA-b"
@@ -442,10 +520,21 @@ def test_run_review_writes_log_and_detects_block(sut, tmp_path, mocker):
     mocker.patch.object(sut, "fetch_pr_head")
     mocker.patch.object(sut.subprocess, "run", return_value=MagicMock(returncode=0))
     log = tmp_path / "logs"
-    ok, path = sut.run_review(make_candidate(sut), tmp_path, dry_run=False, log_dir=log, timeout=5)
-    assert ok is True
-    assert path == log / "os-autoinst-openQA-1.log"
-    assert path.exists()
+    outcome = sut.run_review(make_candidate(sut), tmp_path, dry_run=False, log_dir=log, timeout=5)
+    assert outcome == sut.ReviewOutcome(ok=True, skipped=False, log=log / "os-autoinst-openQA-1.log")
+    assert outcome.log.exists()
+
+
+def test_run_review_reports_a_skipped_session(sut, tmp_path, mocker):
+    mocker.patch.object(sut, "fetch_pr_head")
+    mocker.patch.object(
+        sut.subprocess,
+        "run",
+        side_effect=lambda _cmd, **kw: write_log(kw["stdout"], "--- REVIEW SKIPPED (github o/r#1, nothing new) ---\n"),
+    )
+    outcome = sut.run_review(make_candidate(sut), tmp_path, dry_run=False, log_dir=tmp_path, timeout=5)
+    assert outcome.ok is True
+    assert outcome.skipped is True
 
 
 def test_run_review_dispatches_to_the_selected_runner(sut, tmp_path, mocker):
@@ -470,9 +559,10 @@ def test_run_review_dispatches_to_the_selected_runner(sut, tmp_path, mocker):
 def test_run_review_kills_and_records_a_timeout(sut, tmp_path, mocker):
     mocker.patch.object(sut, "fetch_pr_head")
     mocker.patch.object(sut.subprocess, "run", side_effect=subprocess.TimeoutExpired(["pi"], 5))
-    ok, path = sut.run_review(make_candidate(sut), tmp_path, dry_run=False, log_dir=tmp_path, timeout=5)
-    assert ok is False
-    assert "REVIEW FAILED (timeout after 5s)" in path.read_text()
+    outcome = sut.run_review(make_candidate(sut), tmp_path, dry_run=False, log_dir=tmp_path, timeout=5)
+    assert outcome.ok is False
+    assert outcome.skipped is False
+    assert "REVIEW FAILED (timeout after 5s)" in outcome.log.read_text()
 
 
 def test_parse_args_defaults(sut):
@@ -571,7 +661,11 @@ def test_main_runs_each_selected_pr(sut, tmp_path, mocker, capsys):
         "pr_state",
         side_effect=[make_state(sut, reviewed_on_head=True), make_state(sut)],
     )
-    run_review = mocker.patch.object(sut, "run_review", side_effect=[(True, Path("/log/1")), (False, Path("/log/2"))])
+    run_review = mocker.patch.object(
+        sut,
+        "run_review",
+        side_effect=[make_outcome(sut, ok=True, log="/log/1"), make_outcome(sut, ok=False, log="/log/2")],
+    )
     code = sut.main(["--owner", "os-autoinst", "--limit", "2", "--log-dir", str(tmp_path / "logs")])
     assert code == 1
     assert run_review.call_count == 2
@@ -584,11 +678,27 @@ def test_main_counts_a_posted_review_after_a_timeout_as_ok(sut, tmp_path, mocker
     mocker.patch.object(sut, "search_candidates", return_value=cands)
     mocker.patch.object(sut, "filter_candidates", return_value=(cands, states_for(sut, cands)))
     mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
-    mocker.patch.object(sut, "run_review", return_value=(False, Path("/log/1")))
+    mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=False, log="/log/1"))
     mocker.patch.object(sut, "pr_state", return_value=make_state(sut, reviewed_on_head=True))
     code = sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
     assert code == 0
     assert "done: 1 ok, 0 failed" in capsys.readouterr().err
+
+
+def test_main_counts_a_skipped_session_as_ok_and_records_the_head(sut, tmp_path, mocker, capsys):
+    cands = [make_candidate(sut, number=1)]
+    mocker.patch.object(sut, "bot_login", return_value="bot")
+    mocker.patch.object(sut, "search_candidates", return_value=cands)
+    mocker.patch.object(sut, "filter_candidates", return_value=(cands, states_for(sut, cands, head="abc123")))
+    mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
+    mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=True, skipped=True, log="/log/1"))
+    mocker.patch.object(sut, "pr_state", side_effect=AssertionError("a skip needs no API lookup"))
+    cache = tmp_path / "skipped.json"
+    mocker.patch.object(sut, "SKIP_CACHE", cache)
+    code = sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
+    assert code == 0
+    assert "skip  os-autoinst/openQA#1" in capsys.readouterr().err
+    assert sut.load_skips(cache) == {"os-autoinst/openQA#1": "abc123"}
 
 
 def test_main_marks_an_unposted_session_as_failed(sut, tmp_path, mocker, capsys):
@@ -597,7 +707,7 @@ def test_main_marks_an_unposted_session_as_failed(sut, tmp_path, mocker, capsys)
     mocker.patch.object(sut, "search_candidates", return_value=cands)
     mocker.patch.object(sut, "filter_candidates", return_value=(cands, states_for(sut, cands)))
     mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
-    mocker.patch.object(sut, "run_review", return_value=(True, Path("/log/1")))
+    mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=True, log="/log/1"))
     mocker.patch.object(sut, "pr_state", return_value=make_state(sut))
     code = sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
     assert code == 1
@@ -612,7 +722,7 @@ def test_main_forces_comment_when_the_bot_already_requested_changes(sut, tmp_pat
     mocker.patch.object(sut, "filter_candidates", return_value=(cands, states))
     mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
     mocker.patch.object(sut, "pr_state", return_value=make_state(sut, reviewed_on_head=True))
-    run_review = mocker.patch.object(sut, "run_review", return_value=(True, Path("/log/1")))
+    run_review = mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=True, log="/log/1"))
     sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
     assert run_review.call_args.kwargs["comment_only"] is True
 
