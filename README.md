@@ -1,5 +1,3 @@
-# Scripts
-
 Personal administration, openQA, OBS/openSUSE, Git, and system utility scripts.
 
 ## Overview
