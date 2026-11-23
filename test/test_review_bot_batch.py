@@ -154,6 +154,31 @@ def test_pr_state_detects_block_on_head(sut, mocker):
     assert state.has_bot_block is True
 
 
+def test_pr_state_lifts_the_block_when_the_bot_approves_later(sut, mocker):
+    view = MagicMock(returncode=0, stdout="abc123", stderr="")
+    reviews = MagicMock(
+        returncode=0,
+        stdout="os-autoinst-review\tCHANGES_REQUESTED\tabc123\nos-autoinst-review\tAPPROVED\tabc123\n",
+        stderr="",
+    )
+    mocker.patch.object(sut, "run", side_effect=[view, reviews])
+    state = sut.pr_state(make_candidate(sut), "os-autoinst-review")
+    assert state.reviewed_on_head is True
+    assert state.has_bot_block is False
+
+
+def test_pr_state_keeps_the_block_across_a_later_bot_comment(sut, mocker):
+    view = MagicMock(returncode=0, stdout="abc123", stderr="")
+    reviews = MagicMock(
+        returncode=0,
+        stdout="os-autoinst-review\tCHANGES_REQUESTED\tabc123\nos-autoinst-review\tCOMMENTED\tabc123\n",
+        stderr="",
+    )
+    mocker.patch.object(sut, "run", side_effect=[view, reviews])
+    state = sut.pr_state(make_candidate(sut), "os-autoinst-review")
+    assert state.has_bot_block is True
+
+
 def test_pr_state_raises_when_reviews_cannot_be_read(sut, mocker):
     view = MagicMock(returncode=0, stdout="abc123", stderr="")
     reviews = MagicMock(returncode=1, stdout="", stderr="rate limited")
@@ -222,6 +247,18 @@ def test_filter_candidates_skips_candidate_with_unreadable_state(sut, capsys):
     kept, _ = sut.filter_candidates(cands, "os-autoinst-review", skip_reviewed=True, state_lookup=lookup)
     assert [c.number for c in kept] == [2]
     assert "skip os-autoinst/openQA#1: api down" in capsys.readouterr().err
+
+
+def test_filter_candidates_only_blocked_keeps_the_bot_block(sut):
+    cands = [make_candidate(sut, number=1), make_candidate(sut, number=2), make_candidate(sut, number=3)]
+    kept, _ = sut.filter_candidates(
+        cands,
+        "os-autoinst-review",
+        skip_reviewed=False,
+        only_blocked=True,
+        state_lookup=lambda c, _l: make_state(sut, has_bot_review=c.number != 3, has_bot_block=c.number == 2),
+    )
+    assert [c.number for c in kept] == [2]
 
 
 def test_filter_candidates_recheck_keeps_reviewed(sut):
@@ -448,6 +485,7 @@ def test_parse_args_defaults(sut):
     assert args.timeout == sut.DEFAULT_TIMEOUT
     assert args.include_bots is False
     assert args.recheck is False
+    assert args.only_blocked is False
     assert args.runner == "pi"
     assert not args.model
     assert args.auto is False

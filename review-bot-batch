@@ -3,10 +3,10 @@
 
 Resolves a scope (an org or a list of repositories) with ``gh search prs``, drops drafts,
 bot-authored PRs and PRs the bot already reviewed on the current head, then ranks the rest:
-PRs where the bot already requested changes, then unreviewed PRs with at most one human
-reviewer, then everything else. One review session runs serially in the matching local
-checkout; a PR with an earlier bot block gets a comment instead of a second block. The
-runner defaults to ``pi -p "/review-as-bot <url> --post"``; ``--runner opencode`` uses
+PRs the bot currently blocks, then unreviewed PRs with at most one human reviewer, then
+everything else. ``--only-blocked`` narrows the batch to the blocked PRs alone. One review
+session runs serially in the matching local checkout; a blocked PR gets a comment instead of
+a second block. The runner defaults to ``pi -p "/review-as-bot <url> --post"``; ``--runner opencode`` uses
 ``opencode run --command review-as-bot`` instead. Posting is the default; ``--dry-run``
 prints each draft instead and leaves ``REVIEW_BOT_POST`` unset so the as-bot wrappers refuse
 writes. ``--watch --interval N`` repeats the cycle and gives each cycle
@@ -73,6 +73,12 @@ class PrState:
     has_bot_review: bool = False
     has_bot_block: bool = False
     human_reviewers: int = 0
+
+
+def still_blocked(bot: list[tuple[str, str]]) -> bool:
+    """Return whether the bot's latest decisive review requests changes (a comment neither blocks nor lifts)."""
+    decisive = [state for state, _commit in bot if state != "COMMENTED"]
+    return bool(decisive) and decisive[-1] == "CHANGES_REQUESTED"
 
 
 def review_priority(state: PrState) -> int:
@@ -198,7 +204,7 @@ def pr_state(cand: Candidate, login: str) -> PrState:
         head=head,
         reviewed_on_head=any(commit == head for _state, commit in bot),
         has_bot_review=bool(bot),
-        has_bot_block=any(state == "CHANGES_REQUESTED" for state, _commit in bot),
+        has_bot_block=still_blocked(bot),
         human_reviewers=len(humans),
     )
 
@@ -209,9 +215,10 @@ def filter_candidates(
     *,
     skip_reviewed: bool,
     include_bots: bool = False,
+    only_blocked: bool = False,
     state_lookup: Callable[[Candidate, str], PrState] | None = None,
 ) -> tuple[list[Candidate], dict[tuple[str, int], PrState]]:
-    """Drop drafts, bot-authored PRs and (optionally) heads the bot already reviewed."""
+    """Drop drafts, bot-authored PRs, unblocked PRs and (optionally) heads the bot already reviewed."""
     if state_lookup is None:
         state_lookup = pr_state
     kept: list[Candidate] = []
@@ -227,6 +234,8 @@ def filter_candidates(
             print(f"skip {cand.repo}#{cand.number}: {err}", file=sys.stderr)
             continue
         states[cand.repo, cand.number] = state
+        if only_blocked and not state.has_bot_block:
+            continue
         if skip_reviewed and state.reviewed_on_head:
             continue
         kept.append(cand)
@@ -434,6 +443,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--dry-run", action="store_true", help="print each draft instead of posting (default: post)")
     parser.add_argument("--recheck", action="store_true", help="also review PRs the bot already reviewed on head")
+    parser.add_argument(
+        "--only-blocked",
+        action="store_true",
+        help="only consider PRs the bot still blocks with a changes-requested review",
+    )
     parser.add_argument("--include-bots", action="store_true", help="include PRs authored by dependency bots")
     parser.add_argument("--no-clone", action="store_true", help="skip repos with no local checkout instead of cloning")
     parser.add_argument("--root", action="append", default=[], dest="roots", help="checkout root, repeatable")
@@ -508,6 +522,7 @@ def run_cycle(args: argparse.Namespace) -> int:
         login,
         skip_reviewed=not args.recheck,
         include_bots=args.include_bots,
+        only_blocked=args.only_blocked,
     )
     candidates = select_candidates(kept, args.limit, oldest=args.oldest, states=states)
     if not candidates:
