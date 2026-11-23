@@ -1,6 +1,8 @@
 #!/bin/sh
 # OpenCode V1, frozen legacy sandbox: own prefixes so it cannot touch the V2 primary tree.
 set -eu
+# Same stale key as in the V2 wrapper: keep the flat-rate OAuth path the only Google credential.
+unset GEMINI_API_KEY
 export XDG_CONFIG_HOME="$HOME/.config/opencode-1"
 export XDG_DATA_HOME="$HOME/.local/share/opencode-1"
 export XDG_CACHE_HOME="$HOME/.cache/opencode-1"
