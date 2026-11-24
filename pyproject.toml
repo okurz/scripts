@@ -171,6 +171,7 @@ max-complexity = 9
 "obs-pr-repair" = ["T201"]
 "redmine-fetcher" = ["T201"]
 "review-bot-batch" = ["T201", "PLR0913"]
+"git-worktree-audit" = ["T201"]
 
 [tool.ruff.format]
 docstring-code-format = true

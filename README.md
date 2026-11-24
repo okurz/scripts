@@ -19,6 +19,27 @@ Key areas include:
 
 ## Highlighted tools
 
+### git-worktree-audit
+
+Project-agnostic pre-consolidation check: reports checkouts that hold branches or
+remote-tracking refs whose tip object the primary checkout does not have. Exits 1 when
+anything is at risk, so it can gate moving or removing a checkout.
+
+```bash
+# Audit a deep clone before retiring it into worktrees of the primary checkout
+git worktree-audit --primary ~/local/os-autoinst/openQA ~/local/os-autoinst/oqa4
+
+# Machine-readable, including ahead/behind and dirty counts
+git worktree-audit --json --primary ~/local/os-autoinst/openQA archive/oqa4-20261120
+```
+
+Adopt at-risk refs locally before removing the checkout:
+
+```bash
+git -C primary fetch --no-tags /path/to/clone '+refs/heads/*:refs/remotes/clones/clone/*'
+git -C primary fetch --no-tags /path/to/clone '+refs/remotes/*:refs/remotes/clones/clone/*'
+```
+
 ### obs-pr-repair
 
 Project-agnostic OBS PR diagnostics and recovery tool for GitHub repositories

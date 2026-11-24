@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+"""Report checkouts holding refs that a primary checkout does not have.
+
+Audits candidate checkouts (deep clones or worktrees) before they are
+consolidated into worktrees of a primary checkout. A directory is reported with
+``heads_at_risk`` or ``remote_refs_at_risk`` when it holds a ref whose tip
+object is absent from the primary checkout. Such refs must be adopted before
+the directory is moved or removed, e.g. via
+``git fetch $DIRECTORY '+refs/heads/*:refs/remotes/clones/$NAME/*'``.
+
+Exit codes: 0 when nothing is at risk, 1 when any ref is at risk, 2 on invalid
+usage or an unresolvable primary checkout or base ref, so the audit can gate a
+consolidation.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+DEFAULT_BASE = "origin/master"
+EXIT_OK = 0
+EXIT_AT_RISK = 1
+EXIT_USAGE = 2
+AUDITED_KINDS = frozenset({"primary", "worktree", "clone"})
+COUNT_FIELDS = ("behind", "ahead")
+
+
+def run_git(directory: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Run git in a directory and return the completed process."""
+    return subprocess.run(
+        ["git", "-C", str(directory), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def git_output(directory: Path, *args: str) -> str | None:
+    """Return stripped git output, or None when the command fails."""
+    result = run_git(directory, *args)
+    if result.returncode:
+        return None
+    return result.stdout.rstrip("\n")
+
+
+def git_lines(directory: Path, *args: str) -> list[str]:
+    """Return the non-empty output lines of a git command."""
+    output = git_output(directory, *args)
+    return [line for line in (output or "").splitlines() if line.strip()]
+
+
+def directory_kind(path: Path, primary: Path) -> str:
+    """Classify a path as primary, worktree, clone, other or missing."""
+    if not path.is_dir():
+        return "missing"
+    if path.resolve() == primary:
+        return "primary"
+    if (path / ".git").is_file():
+        return "worktree"
+    if (path / ".git").is_dir():
+        return "clone"
+    return "other"
+
+
+def dirty_state(directory: Path) -> dict[str, int]:
+    """Count staged, modified, untracked files and stashes."""
+    dirty = {"staged": 0, "modified": 0, "untracked": 0, "stashes": 0}
+    for line in git_lines(directory, "status", "--porcelain"):
+        if line.startswith("??"):
+            dirty["untracked"] += 1
+            continue
+        if line[:1] != " ":
+            dirty["staged"] += 1
+        if line[1:2] != " ":
+            dirty["modified"] += 1
+    dirty["stashes"] = len(git_lines(directory, "stash", "list"))
+    return dirty
+
+
+def refs_at_risk(directory: Path, primary: Path, namespace: str) -> list[str]:
+    """Return short ref names of a namespace whose tip object is absent from primary."""
+    at_risk = []
+    for line in git_lines(directory, "for-each-ref", "--format=%(refname:short) %(objectname)", namespace):
+        name, _, objectname = line.partition(" ")
+        if objectname and run_git(primary, "cat-file", "-e", objectname).returncode != 0:
+            at_risk.append(name)
+    return at_risk
+
+
+def head_state(directory: Path) -> dict[str, Any]:
+    """Report the head branch, its upstream and ahead/behind counts."""
+    head = git_output(directory, "symbolic-ref", "--short", "HEAD") or "detached"
+    state: dict[str, Any] = {"head": head, "upstream": None, "ahead": None, "behind": None}
+    if head == "detached":
+        return state
+    upstream = git_output(directory, "for-each-ref", "--format=%(upstream:short)", f"refs/heads/{head}")
+    if not upstream:
+        return state
+    state["upstream"] = upstream
+    counts = (git_output(directory, "rev-list", "--left-right", "--count", f"{upstream}...HEAD") or "").split()
+    if len(counts) == len(COUNT_FIELDS):
+        state.update(dict(zip(COUNT_FIELDS, map(int, counts), strict=True)))
+    return state
+
+
+def audit_directory(path_label: str, primary: Path) -> dict[str, Any]:
+    """Audit one candidate path against the primary checkout."""
+    path = Path(path_label)
+    kind = directory_kind(path, primary)
+    report: dict[str, Any] = {"path": path_label, "kind": kind}
+    if kind not in AUDITED_KINDS:
+        return report
+    directory = path.resolve()
+    report.update(head_state(directory))
+    report["dirty"] = dirty_state(directory)
+    report["heads_at_risk"] = refs_at_risk(directory, primary, "refs/heads")
+    report["remote_refs_at_risk"] = refs_at_risk(directory, primary, "refs/remotes")
+    return report
+
+
+def render_text(primary: Path, base: str, directories: list[dict[str, Any]]) -> str:
+    """Render the report as human-readable text."""
+    lines = [f"primary: {primary}", f"base: {base}"]
+    for report in directories:
+        lines.extend(["", f"{report['path']} ({report['kind']})"])
+        if "head" not in report:
+            continue
+        lines.append(f"  head: {report['head']}")
+        upstream = report["upstream"]
+        detail = f" (ahead {report['ahead']}, behind {report['behind']})" if upstream else ""
+        lines.append(f"  upstream: {upstream or 'none'}{detail}")
+        dirty = report["dirty"]
+        lines.append(
+            f"  dirty: {dirty['staged']} staged, {dirty['modified']} modified, "
+            f"{dirty['untracked']} untracked, {dirty['stashes']} stashes"
+        )
+        lines.extend([
+            f"  heads_at_risk: {len(report['heads_at_risk'])}",
+            f"  remote_refs_at_risk: {len(report['remote_refs_at_risk'])}",
+        ])
+    return "\n".join(lines) + "\n"
+
+
+def create_parser() -> argparse.ArgumentParser:
+    """Build the argument parser."""
+    parser = argparse.ArgumentParser(
+        prog="git worktree-audit",
+        description="Report refs that candidate checkouts hold but the primary checkout lacks.",
+    )
+    parser.add_argument(
+        "--primary",
+        help="primary checkout that is meant to be the single object store (default: the current repository)",
+    )
+    parser.add_argument(
+        "--base",
+        default=DEFAULT_BASE,
+        help=f"ref considered current in the primary checkout (default: {DEFAULT_BASE})",
+    )
+    parser.add_argument("--json", action="store_true", help="print the report as JSON")
+    parser.add_argument("directories", nargs="+", metavar="DIRECTORY", help="candidate checkouts to audit")
+    return parser
+
+
+def resolve_primary(option: str | None) -> Path | None:
+    """Resolve the primary checkout from the option or the current repository."""
+    if option:
+        path = Path(option)
+        return path.resolve() if path.is_dir() else None
+    toplevel = git_output(Path.cwd(), "rev-parse", "--show-toplevel")
+    return Path(toplevel) if toplevel else None
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint."""
+    args = create_parser().parse_args(argv)
+    primary = resolve_primary(args.primary)
+    if primary is None:
+        print(f"Primary checkout '{args.primary or Path.cwd()}' is not a git repository", file=sys.stderr)
+        return EXIT_USAGE
+    if git_output(primary, "rev-parse", "--verify", f"{args.base}^{{commit}}") is None:
+        print(f"Base ref '{args.base}' cannot be resolved in the primary checkout '{primary}'", file=sys.stderr)
+        return EXIT_USAGE
+    directories = [audit_directory(label, primary) for label in args.directories]
+    if args.json:
+        print(json.dumps({"primary": str(primary), "base": args.base, "directories": directories}, indent=2))
+    else:
+        sys.stdout.write(render_text(primary, args.base, directories))
+    at_risk = sum(len(d.get("heads_at_risk", [])) + len(d.get("remote_refs_at_risk", [])) for d in directories)
+    return EXIT_AT_RISK if at_risk else EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())
