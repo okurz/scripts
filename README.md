@@ -40,6 +40,15 @@ git -C primary fetch --no-tags /path/to/clone '+refs/heads/*:refs/remotes/clones
 git -C primary fetch --no-tags /path/to/clone '+refs/remotes/*:refs/remotes/clones/clone/*'
 ```
 
+### git-delete-no-content-branches
+
+Deletes local branches whose commits are all contained in `remotes/origin/master` or
+`remotes/origin/main`. With `prune.worktrees=true` (the default) a branch that is checked
+out in a worktree is deleted together with that worktree, and only when the worktree has
+neither uncommitted changes nor stashes. Disable it per repository with
+`git config prune.worktrees false` or per run with `--keep-worktree`; preview with
+`--dry-run`.
+
 ### obs-pr-repair
 
 Project-agnostic OBS PR diagnostics and recovery tool for GitHub repositories

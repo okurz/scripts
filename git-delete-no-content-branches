@@ -1,11 +1,73 @@
 #!/bin/sh -e
-base=$(git branch -a | grep 'origin/\(master\|main\)' | tail -n1)
+# Delete branches whose content is already contained in the upstream base branch.
+#
+# A branch that has a worktree attached is only deleted together with that
+# worktree, and only when the worktree has neither uncommitted changes nor
+# stashes. Set prune.worktrees=false or pass --keep-worktree to delete branches
+# and leave worktrees in place.
+
+dry_run=
+prune_worktrees=true
+if configured=$(git config --get --bool prune.worktrees 2>/dev/null); then
+    prune_worktrees=$configured
+fi
+
+for arg in "$@"; do
+    case "$arg" in
+        -n | --dry-run) dry_run="echo" ;;
+        --keep-worktree) prune_worktrees=false ;;
+        *)
+            echo "Usage: git delete-no-content-branches [--dry-run] [--keep-worktree]" >&2
+            exit 2
+            ;;
+    esac
+done
+
+# Print the worktree path that has the given branch checked out, if any
+worktree_for() {
+    git worktree list --porcelain | awk -v branch="refs/heads/$1" '
+        /^worktree / { path = substr($0, 10) }
+        /^branch / { if (substr($0, 8) == branch) print path }
+    '
+}
+
+worktree_is_clean() {
+    test -z "$(git -C "$1" status --porcelain)" && test -z "$(git -C "$1" stash list)"
+}
+
+base=$(git branch -a | sed 's/^[ *]*//' | grep '^remotes/origin/\(master\|main\)$' | tail -n1 | sed 's|^remotes/||')
+if [ -z "$base" ]; then
+    echo "No remotes/origin/master or remotes/origin/main ref to compare against" >&2
+    exit 1
+fi
 current=$(git branch --show-current 2>/dev/null)
-for i in $(git branch-raw); do
+# git branch-raw drops branches marked as checked out in another worktree, so add
+# the plain ref list to reach them
+branches=$(
+    {
+        git branch-raw
+        git branch --format='%(refname:short)'
+    } | sort -u | grep -v '\(no_rebase\|subrepo\)'
+)
+for i in $branches; do
     if [ "$i" = "$current" ] || [ "$i" = "master" ] || [ "$i" = "main" ]; then
         continue
     fi
-    if [ "$(git log1 $base..$i | wc -l)" = "0" ]; then
-        git branch -D $i
+    if [ "$(git rev-list --count "$base..$i")" = "0" ]; then
+        worktree=$(worktree_for "$i")
+        if [ -n "$worktree" ]; then
+            if [ "$prune_worktrees" != true ]; then
+                echo "Keeping branch $i: checked out in worktree $worktree"
+                continue
+            fi
+            if ! worktree_is_clean "$worktree"; then
+                echo "Keeping branch $i: worktree $worktree has uncommitted or stashed changes"
+                continue
+            fi
+            echo "Removing worktree $worktree"
+            $dry_run git worktree remove "$worktree"
+        fi
+        $dry_run git branch -D "$i"
     fi
 done
+$dry_run git worktree prune
