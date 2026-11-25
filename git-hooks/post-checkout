@@ -1,0 +1,30 @@
+#!/bin/sh
+# Symlink shared paths into a checkout, driven by repository config:
+#
+#   git config --add worktree.symlink "tasks=/path/to/primary/tasks"
+#   git config worktree.setup "make prepare-node-env"
+#
+# Installed as post-checkout in the primary checkout's .git/hooks, which every
+# worktree shares. Only the branch-checkout case acts, only a missing link is
+# created and `worktree.setup` is printed rather than run, so the hook stays
+# cheap and never blocks a checkout.
+[ "$3" = "1" ] || exit 0
+toplevel=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+entries=$(git config --get-all worktree.symlink 2>/dev/null) || exit 0
+[ -n "$entries" ] || exit 0
+
+echo "$entries" | while IFS= read -r entry; do
+    name=${entry%%=*}
+    target=${entry#*=}
+    [ -n "$name" ] && [ -n "$target" ] || continue
+    link=$toplevel/$name
+    if [ -e "$link" ] || [ -L "$link" ]; then
+        continue
+    fi
+    mkdir -p "$(dirname "$link")"
+    ln -s "$target" "$link" && echo "linked $name -> $target"
+done
+
+setup=$(git config --get worktree.setup 2>/dev/null) || setup=
+[ -n "$setup" ] && echo "next: $setup (in $toplevel)"
+exit 0

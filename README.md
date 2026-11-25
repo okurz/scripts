@@ -34,6 +34,20 @@ cd ~/local/os-autoinst/oqa-154-cleanup && git plans-dir
 Plans must be read and written in `$(git plans-dir)`. A worktree's own `tasks/` path
 is git-ignored, so a plan written there diverges without any `git status` report.
 
+### git-hooks/post-checkout
+
+Links shared paths into a checkout as configured per repository, and only when the
+link is missing:
+
+```bash
+git config --add worktree.symlink "tasks=/path/to/primary/tasks"
+git config worktree.setup "make prepare-node-env"
+```
+
+Installed by pointing the primary checkout's `.git/hooks/post-checkout` at this
+script; worktrees share that hooks directory. `worktree.setup` is printed rather
+than run so a checkout never blocks on an install.
+
 ### git-worktree-audit
 
 Project-agnostic pre-consolidation check: reports checkouts that hold branches or

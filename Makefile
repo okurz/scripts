@@ -18,8 +18,8 @@ PY_SCRIPTS ?= gitea-review-cleanup github-all-prs mac-to-ipv6 obs-pr-repair \
 	git-plans-dir git-worktree-audit
 PY_ALL = $(PY_FILES) $(PY_SCRIPTS)
 
-SHELL_SCRIPTS ?= gh-as-bot git-delete-no-content-branches git-rebase-all-branches git-review git-review-branch \
-	git-upstream-base glab-as-bot hosts-yaml-to-aaaa vimeo-review-dl
+SHELL_SCRIPTS ?= gh-as-bot git-delete-no-content-branches git-hooks/post-checkout git-rebase-all-branches \
+	git-review git-review-branch git-upstream-base glab-as-bot hosts-yaml-to-aaaa vimeo-review-dl
 
 .PHONY: help
 help: ## Display this help
