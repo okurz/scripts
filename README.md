@@ -19,6 +19,21 @@ Key areas include:
 
 ## Highlighted tools
 
+### git-plans-dir
+
+Prints the directory that holds a repository's plans: `<primary checkout>/tasks`,
+resolved from the git common directory so it is identical in the primary checkout and
+in every worktree. `plans.dir` in the git config overrides it.
+
+```bash
+# Same answer from the primary checkout and from any worktree
+cd ~/local/os-autoinst/openQA && git plans-dir
+cd ~/local/os-autoinst/oqa-154-cleanup && git plans-dir
+```
+
+Plans must be read and written in `$(git plans-dir)`. A worktree's own `tasks/` path
+is git-ignored, so a plan written there diverges without any `git status` report.
+
 ### git-worktree-audit
 
 Project-agnostic pre-consolidation check: reports checkouts that hold branches or

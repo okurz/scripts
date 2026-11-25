@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Print the directory that holds the plans of a repository.
+
+Worktrees share the object store, refs and config of their primary checkout, so
+plans must live in one place instead of being copied per checkout. Resolve that
+place from the git common directory so the command works identically in the
+primary checkout and in every worktree.
+
+The default is `<primary checkout>/tasks`; `plans.dir` in the shared git config
+overrides it.
+"""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+
+CONFIG_KEY = "plans.dir"
+DEFAULT_NAME = "tasks"
+
+
+def git(*args: str) -> subprocess.CompletedProcess[str]:
+    """Run git and return the completed process."""
+    return subprocess.run(["git", *args], capture_output=True, text=True, check=False)
+
+
+def resolve_plans_dir() -> str | None:
+    """Return the plans directory, or None outside a git repository."""
+    common_dir = git("rev-parse", "--path-format=absolute", "--git-common-dir")
+    if common_dir.returncode or not common_dir.stdout.strip():
+        return None
+    configured = git("config", "--get", CONFIG_KEY)
+    override = configured.stdout.strip() if configured.returncode == 0 else ""
+    if override:
+        return override
+    primary = common_dir.stdout.strip().rsplit("/", 1)[0]
+    return f"{primary}/{DEFAULT_NAME}"
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint."""
+    del argv
+    plans_dir = resolve_plans_dir()
+    if plans_dir is None:
+        print("not inside a git repository", file=sys.stderr)
+        return 1
+    print(plans_dir)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

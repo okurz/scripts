@@ -15,7 +15,7 @@ PY_FILES ?= $(shell git ls-files '*.py')
 PY_SCRIPTS ?= gitea-review-cleanup github-all-prs mac-to-ipv6 obs-pr-repair \
 	openqa-db_query_last_use_of_module osc-get-pr-status osc-list-all-unresolvables \
 	osc-sync-deps osc-sync-leap redmine-fetcher review-bot-batch suse-qa-sle-etherpad-status \
-	git-worktree-audit
+	git-plans-dir git-worktree-audit
 PY_ALL = $(PY_FILES) $(PY_SCRIPTS)
 
 SHELL_SCRIPTS ?= gh-as-bot git-delete-no-content-branches git-rebase-all-branches git-review git-review-branch \
