@@ -80,6 +80,7 @@ class PrState:
     reviewed_on_head: bool = False
     has_bot_review: bool = False
     has_bot_block: bool = False
+    blocked_on_head: bool = False
     human_reviewers: int = 0
 
 
@@ -94,8 +95,13 @@ class ReviewOutcome:
 
 def still_blocked(bot: list[tuple[str, str]]) -> bool:
     """Return whether the bot's latest decisive review requests changes (a comment neither blocks nor lifts)."""
-    decisive = [state for state, _commit in bot if state != "COMMENTED"]
-    return bool(decisive) and decisive[-1] == "CHANGES_REQUESTED"
+    decisive = [(state, commit) for state, commit in bot if state != "COMMENTED"]
+    return bool(decisive) and decisive[-1][0] == "CHANGES_REQUESTED"
+
+
+def blocked_on_head(bot: list[tuple[str, str]], head: str) -> bool:
+    """Return whether the bot's block covers this head, so a re-review can only comment."""
+    return still_blocked(bot) and next((commit for state, commit in reversed(bot) if state != "COMMENTED"), "") == head
 
 
 def review_priority(state: PrState) -> int:
@@ -227,6 +233,7 @@ def pr_state(cand: Candidate, login: str) -> PrState:
         reviewed_on_head=any(commit == head for _state, commit in bot),
         has_bot_review=bool(bot),
         has_bot_block=still_blocked(bot),
+        blocked_on_head=blocked_on_head(bot, head),
         human_reviewers=len(humans),
     )
 
@@ -561,7 +568,7 @@ def review_candidate(
             dry_run=args.dry_run,
             model=args.model,
             auto=args.auto,
-            comment_only=state.has_bot_block,
+            comment_only=state.blocked_on_head,
             extra_args=args.runner_args,
             log_dir=log_dir,
             timeout=args.timeout,

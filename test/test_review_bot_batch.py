@@ -167,6 +167,7 @@ def test_pr_state_detects_stale_block(sut, mocker):
     state = sut.pr_state(make_candidate(sut), "os-autoinst-review")
     assert state.reviewed_on_head is False
     assert state.has_bot_block is True
+    assert state.blocked_on_head is False
 
 
 def test_pr_state_detects_block_on_head(sut, mocker):
@@ -176,6 +177,7 @@ def test_pr_state_detects_block_on_head(sut, mocker):
     state = sut.pr_state(make_candidate(sut), "os-autoinst-review")
     assert state.reviewed_on_head is True
     assert state.has_bot_block is True
+    assert state.blocked_on_head is True
 
 
 def test_pr_state_lifts_the_block_when_the_bot_approves_later(sut, mocker):
@@ -201,6 +203,7 @@ def test_pr_state_keeps_the_block_across_a_later_bot_comment(sut, mocker):
     mocker.patch.object(sut, "run", side_effect=[view, reviews])
     state = sut.pr_state(make_candidate(sut), "os-autoinst-review")
     assert state.has_bot_block is True
+    assert state.blocked_on_head is True
 
 
 def test_pr_state_raises_when_reviews_cannot_be_read(sut, mocker):
@@ -738,7 +741,7 @@ def test_main_marks_an_unposted_session_as_failed(sut, tmp_path, mocker, capsys)
 
 def test_main_forces_comment_when_the_bot_already_requested_changes(sut, tmp_path, mocker):
     cands = [make_candidate(sut, number=1)]
-    states = states_for(sut, cands, has_bot_block=True)
+    states = states_for(sut, cands, has_bot_block=True, blocked_on_head=True)
     mocker.patch.object(sut, "bot_login", return_value="bot")
     mocker.patch.object(sut, "search_candidates", return_value=cands)
     mocker.patch.object(sut, "filter_candidates", return_value=(cands, states))
@@ -747,6 +750,19 @@ def test_main_forces_comment_when_the_bot_already_requested_changes(sut, tmp_pat
     run_review = mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=True, log="/log/1"))
     sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
     assert run_review.call_args.kwargs["comment_only"] is True
+
+
+def test_main_reviews_a_new_head_for_a_new_verdict(sut, tmp_path, mocker):
+    cands = [make_candidate(sut, number=1)]
+    states = states_for(sut, cands, has_bot_block=True, blocked_on_head=False)
+    mocker.patch.object(sut, "bot_login", return_value="bot")
+    mocker.patch.object(sut, "search_candidates", return_value=cands)
+    mocker.patch.object(sut, "filter_candidates", return_value=(cands, states))
+    mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
+    mocker.patch.object(sut, "pr_state", return_value=make_state(sut, has_bot_block=True))
+    run_review = mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=True, log="/log/1"))
+    sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
+    assert run_review.call_args.kwargs["comment_only"] is False
 
 
 def test_main_rejects_watch_with_list(sut, capsys):
