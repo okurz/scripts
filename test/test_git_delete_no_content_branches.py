@@ -186,3 +186,30 @@ def test_missing_worktree_directory_is_pruned(repo: Path, tmp_path: Path) -> Non
     assert result.returncode == 0, result.stderr
     assert str(worktree) not in git(repo, "worktree", "list", "--porcelain")
     assert "merged" not in git(repo, "branch", "--format=%(refname:short)").splitlines()
+
+
+def test_nested_branch_is_listed_once(repo: Path) -> None:
+    tip = git(repo, "rev-parse", "origin/master")
+    git(repo, "update-ref", "refs/heads/clones/oqa2/master", tip)
+    git(repo, "update-ref", "refs/remotes/clones/oqa2/master", tip)
+
+    result = run_tool(repo, "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("git branch -D clones/oqa2/master") == 1
+    assert "heads/clones" not in result.stdout
+
+
+def test_nested_branch_is_deleted_without_breaking_the_run(repo: Path) -> None:
+    tip = git(repo, "rev-parse", "origin/master")
+    git(repo, "update-ref", "refs/heads/clones/oqa2/master", tip)
+    git(repo, "update-ref", "refs/remotes/clones/oqa2/master", tip)
+
+    result = run_tool(repo)
+
+    assert result.returncode == 0, result.stderr
+    heads = git(repo, "for-each-ref", "--format=%(refname)", "refs/heads").splitlines()
+    assert "refs/heads/clones/oqa2/master" not in heads
+    remotes = git(repo, "for-each-ref", "--format=%(refname)", "refs/remotes").splitlines()
+    assert "refs/remotes/clones/oqa2/master" in remotes
+    assert "merged" not in heads

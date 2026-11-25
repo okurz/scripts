@@ -46,7 +46,7 @@ current=$(git branch --show-current 2>/dev/null)
 branches=$(
     {
         git branch-raw
-        git branch --format='%(refname:short)'
+        git for-each-ref --format='%(refname:lstrip=2)' refs/heads
     } | sort -u | grep -v '\(no_rebase\|subrepo\)'
 )
 for i in $branches; do
