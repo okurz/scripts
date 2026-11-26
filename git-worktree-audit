@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-DEFAULT_BASE = "origin/master"
+BASE_CANDIDATES = ("origin/main", "origin/master")
 EXIT_OK = 0
 EXIT_AT_RISK = 1
 EXIT_USAGE = 2
@@ -164,8 +164,7 @@ def create_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--base",
-        default=DEFAULT_BASE,
-        help=f"ref considered current in the primary checkout (default: {DEFAULT_BASE})",
+        help="ref considered current in the primary checkout (default: the remote HEAD, else origin/main, origin/master)",
     )
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     parser.add_argument("directories", nargs="+", metavar="DIRECTORY", help="candidate checkouts to audit")
@@ -181,6 +180,21 @@ def resolve_primary(option: str | None) -> Path | None:
     return Path(toplevel) if toplevel else None
 
 
+def resolves(primary: Path, ref: str) -> bool:
+    """Return whether the ref resolves to a commit in the primary checkout."""
+    return git_output(primary, "rev-parse", "--verify", f"{ref}^{{commit}}") is not None
+
+
+def resolve_base(primary: Path, option: str | None) -> str | None:
+    """Return the base ref: the given option, else the remote HEAD, else the first known default."""
+    if option:
+        return option if resolves(primary, option) else None
+    remote_head = git_output(primary, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    if remote_head and resolves(primary, remote_head):
+        return remote_head
+    return next((name for name in BASE_CANDIDATES if resolves(primary, name)), None)
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint."""
     args = create_parser().parse_args(argv)
@@ -188,14 +202,16 @@ def main(argv: list[str] | None = None) -> int:
     if primary is None:
         print(f"Primary checkout '{args.primary or Path.cwd()}' is not a git repository", file=sys.stderr)
         return EXIT_USAGE
-    if git_output(primary, "rev-parse", "--verify", f"{args.base}^{{commit}}") is None:
-        print(f"Base ref '{args.base}' cannot be resolved in the primary checkout '{primary}'", file=sys.stderr)
+    base = resolve_base(primary, args.base)
+    if base is None:
+        wanted = args.base or " or ".join(BASE_CANDIDATES)
+        print(f"Base ref '{wanted}' cannot be resolved in the primary checkout '{primary}'", file=sys.stderr)
         return EXIT_USAGE
     directories = [audit_directory(label, primary) for label in args.directories]
     if args.json:
-        print(json.dumps({"primary": str(primary), "base": args.base, "directories": directories}, indent=2))
+        print(json.dumps({"primary": str(primary), "base": base, "directories": directories}, indent=2))
     else:
-        sys.stdout.write(render_text(primary, args.base, directories))
+        sys.stdout.write(render_text(primary, base, directories))
     at_risk = sum(len(d.get("heads_at_risk", [])) + len(d.get("remote_refs_at_risk", [])) for d in directories)
     return EXIT_AT_RISK if at_risk else EXIT_OK
 

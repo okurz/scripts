@@ -238,3 +238,48 @@ def test_text_report_skips_a_missing_directory(checkouts, load_script, capsys, t
 )
 def test_parse_counts_reads_the_rev_list_pair(load_script, output, expected) -> None:
     assert load_script("git-worktree-audit").parse_counts(output) == expected
+
+
+def test_base_defaults_to_the_remote_head_of_the_primary(checkouts, load_script, capsys) -> None:
+    primary, peer = checkouts
+
+    code, report = audit_json(load_script, capsys, "--primary", str(primary), str(peer))
+
+    assert code == 0
+    assert report["base"] == "origin/master"
+
+
+def test_base_defaults_to_origin_main_for_a_main_repository(tmp_path, load_script, capsys) -> None:
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    git(seed, "init", "-b", "main")
+    commit(seed, "README.md", "seed\n")
+    primary = tmp_path / "primary"
+    git(tmp_path, "clone", str(seed), str(primary))
+
+    code, report = audit_json(load_script, capsys, "--primary", str(primary), str(primary))
+
+    assert code == 0
+    assert report["base"] == "origin/main"
+
+
+def test_default_base_names_both_candidates_when_neither_resolves(tmp_path, load_script, capsys) -> None:
+    repo = tmp_path / "lonely"
+    repo.mkdir()
+    git(repo, "init", "-b", "trunk")
+    commit(repo, "README.md", "seed\n")
+
+    code = load_script("git-worktree-audit").main(["--primary", str(repo), str(repo)])
+
+    assert code == 2
+    assert "Base ref 'origin/main or origin/master' cannot be resolved" in capsys.readouterr().err
+
+
+def test_explicit_base_wins_over_the_remote_head(checkouts, load_script, capsys) -> None:
+    primary, peer = checkouts
+    git(primary, "branch", "release", "origin/master")
+
+    code, report = audit_json(load_script, capsys, "--primary", str(primary), "--base", "release", str(peer))
+
+    assert code == 0
+    assert report["base"] == "release"
