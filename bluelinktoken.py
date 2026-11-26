@@ -109,7 +109,7 @@ def wait_for_login(driver: webdriver.Chrome, cfg: BrandConfig) -> None:
 
 def wait_for_redirect(driver: webdriver.Chrome, pattern: str) -> str:
     """Poll the browser URL until the brand redirect endpoint appears."""
-    current_url = driver.current_url
+    current_url = ""
     for attempt in range(1, REDIRECT_TRIES + 1):
         print(f" - [{attempt}] Waiting for redirect URL with code")
         current_url = driver.current_url
@@ -188,6 +188,7 @@ def complete_redirect(driver: webdriver.Chrome, cfg: BrandConfig, base_url: str,
 def run_login_flow(driver: webdriver.Chrome, cfg: BrandConfig, base_url: str, redirect_url: str) -> None:
     """Wait for the manual login, follow the redirect and exchange the code."""
     try:
+        wait_for_login(driver, cfg)
         complete_redirect(driver, cfg, base_url, redirect_url)
     except TimeoutException:
         print("❌ Timed out after 5 minutes. Login was not completed or the success element was not found.")
