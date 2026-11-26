@@ -3,6 +3,7 @@
 import json
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -50,12 +51,17 @@ def checkouts(tmp_path: Path) -> tuple[Path, Path]:
     return primary, peer
 
 
-def audit(load_script, capsys, *args: str) -> tuple[int, dict | str]:
-    """Run the audit in-process and return exit code with parsed output."""
+def audit(load_script, capsys, *args: str) -> tuple[int, str]:
+    """Run the audit in-process and return the exit code with the text report."""
     module = load_script("git-worktree-audit")
     code = module.main(list(args))
-    out = capsys.readouterr().out
-    return code, json.loads(out) if "--json" in args else out
+    return code, capsys.readouterr().out
+
+
+def audit_json(load_script, capsys, *args: str) -> tuple[int, dict[str, Any]]:
+    """Run the audit with --json and return the exit code with the parsed report."""
+    code, out = audit(load_script, capsys, "--json", *args)
+    return code, json.loads(out)
 
 
 def test_peer_branch_at_risk_blocks_the_gate(checkouts, load_script, capsys) -> None:
@@ -63,7 +69,7 @@ def test_peer_branch_at_risk_blocks_the_gate(checkouts, load_script, capsys) -> 
     git(peer, "checkout", "-b", "feature/unique")
     commit(peer, "unique.txt", "unique\n")
 
-    code, report = audit(load_script, capsys, "--primary", str(primary), "--json", str(peer))
+    code, report = audit_json(load_script, capsys, "--primary", str(primary), str(peer))
 
     directory = report["directories"][0]
     assert code == 1
@@ -77,7 +83,7 @@ def test_fetching_into_the_clones_namespace_clears_the_gate(checkouts, load_scri
     commit(peer, "unique.txt", "unique\n")
     git(primary, "fetch", "--no-tags", str(peer), "+refs/heads/*:refs/remotes/clones/peer/*")
 
-    code, report = audit(load_script, capsys, "--primary", str(primary), "--json", str(peer))
+    code, report = audit_json(load_script, capsys, "--primary", str(primary), str(peer))
 
     directory = report["directories"][0]
     assert code == 0
@@ -91,7 +97,7 @@ def test_remote_tracking_refs_at_risk(checkouts, load_script, capsys) -> None:
     commit(peer, "unique.txt", "unique\n")
     git(peer, "update-ref", "refs/remotes/okurz/feature/unique", "HEAD")
 
-    code, report = audit(load_script, capsys, "--primary", str(primary), "--json", str(peer))
+    code, report = audit_json(load_script, capsys, "--primary", str(primary), str(peer))
 
     directory = report["directories"][0]
     assert code == 1
@@ -104,12 +110,11 @@ def test_worktree_and_missing_path_are_reported(checkouts, load_script, capsys, 
     git(primary, "worktree", "add", str(worktree), "-b", "wt-branch", "origin/master")
     missing = tmp_path / "gone"
 
-    code, report = audit(
+    code, report = audit_json(
         load_script,
         capsys,
         "--primary",
         str(primary),
-        "--json",
         str(worktree),
         str(missing),
     )
@@ -130,7 +135,7 @@ def test_primary_and_other_directory_kinds(checkouts, load_script, capsys, tmp_p
     plain = tmp_path / "plain"
     plain.mkdir()
 
-    code, report = audit(load_script, capsys, "--primary", str(primary), "--json", str(primary), str(plain))
+    code, report = audit_json(load_script, capsys, "--primary", str(primary), str(primary), str(plain))
 
     assert code == 0
     assert [d["kind"] for d in report["directories"]] == ["primary", "other"]
@@ -142,7 +147,7 @@ def test_dirty_checkout_counts(checkouts, load_script, capsys) -> None:
     (peer / "README.md").write_text("modified\n")
     (peer / "untracked.txt").write_text("untracked\n")
 
-    code, report = audit(load_script, capsys, "--primary", str(primary), "--json", str(peer))
+    code, report = audit_json(load_script, capsys, "--primary", str(primary), str(peer))
 
     assert code == 0
     assert report["directories"][0]["dirty"] == {"staged": 0, "modified": 1, "untracked": 1, "stashes": 0}
@@ -152,7 +157,7 @@ def test_detached_head_is_reported_without_upstream(checkouts, load_script, caps
     primary, peer = checkouts
     git(peer, "checkout", "--detach", "HEAD")
 
-    code, report = audit(load_script, capsys, "--primary", str(primary), "--json", str(peer))
+    code, report = audit_json(load_script, capsys, "--primary", str(primary), str(peer))
 
     directory = report["directories"][0]
     assert code == 0
@@ -188,7 +193,7 @@ def test_primary_defaults_to_the_current_repository(checkouts, load_script, caps
     primary, peer = checkouts
     monkeypatch.chdir(primary)
 
-    code, report = audit(load_script, capsys, "--json", str(peer))
+    code, report = audit_json(load_script, capsys, str(peer))
 
     assert code == 0
     assert report["primary"] == str(primary.resolve())
