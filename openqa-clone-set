@@ -1,14 +1,14 @@
-#!/bin/sh -e
+#!/bin/bash -e
 
 set -o pipefail
 user="${user:-"$USER"}"
 start="${start:-"001"}"
 end="${end:-"010"}"
 
-if [ -z ${host+x} ] || [ -z ${job+x} ]; then
+if [ -z "${host+x}" ] || [ -z "${job+x}" ]; then
     job_url="${1:?"Need 'job_url' as parameter pointing to the openQA job to clone or 'host' and 'job' variables, e.g. either 'https://openqa.opensuse.org/tests/123456' or 'https://openqa.opensuse.org' and '123456'"}"
-    host=${job_url%%/t*}
-    job=${job_url##*/}
+    host="${job_url%%/t*}"
+    job="${job_url##*/}"
 fi
 
 name="${2:-"${user}_investigation"}"
@@ -17,6 +17,6 @@ build="${build:-"$name"}"
 
 dry_run="${dry_run:-""}"
 for i in $(eval echo "{$start..$end}"); do
-    $dry_run openqa-clone-job --skip-chained-deps --within-instance $host $job TEST=${name}_$i BUILD=${build} _GROUP=$group "${@:3}"
+    $dry_run openqa-clone-job --skip-chained-deps --within-instance "$host" "$job" TEST="${name}_$i" BUILD="${build}" _GROUP="$group" "${@:3}"
 done
 
