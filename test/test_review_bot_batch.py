@@ -969,3 +969,158 @@ def test_main_reports_the_latency_after_a_cycle(sut, tmp_path, mocker, capsys):
     err = capsys.readouterr().err
     assert "waits 7d: C1 none" in err
     assert "C3 max" in err
+
+
+def test_run_returns_the_completed_process(sut, fake_subprocess):
+    fake_subprocess.on(["gh", "--version"], stdout="gh 2.0\n")
+
+    result = sut.run(["gh", "--version"])
+
+    assert result.stdout == "gh 2.0\n"
+    assert result.returncode == 0
+    assert fake_subprocess.commands(["gh"]) == [["gh", "--version"]]
+
+
+def test_bot_login_reads_the_identity_from_gh(sut, fake_subprocess):
+    fake_subprocess.on(["gh-as-bot"], stdout=" os-autoinst-review \n")
+
+    assert sut.bot_login() == "os-autoinst-review"
+
+
+def test_bot_login_falls_back_when_gh_fails(sut, fake_subprocess):
+    fake_subprocess.on(["gh-as-bot"], returncode=1)
+
+    assert sut.bot_login() == sut.BOT_FALLBACK
+
+
+def test_census_skips_empty_nodes(sut, mocker):
+    page = {"pageInfo": {"hasNextPage": False, "endCursor": ""}, "nodes": [None, census_node()]}
+    mocker.patch.object(
+        sut, "run", return_value=MagicMock(returncode=0, stderr="", stdout=json.dumps({"data": {"search": page}}))
+    )
+
+    assert [facts.number for facts in sut.fetch_census(["os-autoinst"], [], "os-autoinst-review")] == [7779]
+
+
+def test_pr_state_raises_when_the_head_cannot_be_read(sut, mocker):
+    mocker.patch.object(sut, "run", return_value=MagicMock(returncode=1, stderr="no such PR", stdout=""))
+
+    with pytest.raises(RuntimeError, match=r"cannot read head of os-autoinst/openQA#1: no such PR"):
+        sut.pr_state(make_candidate(sut), "bot")
+
+
+@pytest.mark.parametrize("line", ["too,few,columns", "a,b,c,d,not-a-number,e,f"])
+def test_parse_wait_returns_none_for_unparsable_rows(sut, line):
+    assert sut.parse_wait(line) is None
+
+
+def test_cache_dir_honours_the_cache_flag(load_script, tmp_path):
+    real = load_script("review-bot-batch")
+
+    assert real.cache_dir(argparse.Namespace(cache=str(tmp_path / "x"))) == tmp_path / "x"
+    assert real.cache_dir(argparse.Namespace(cache=None)) == real.DEFAULT_CACHE
+
+
+def test_discover_checkouts_skips_roots_that_do_not_exist(sut, tmp_path):
+    assert sut.discover_checkouts([tmp_path / "absent"]) == {}
+
+
+def test_discover_checkouts_maps_the_origin_repository(sut, tmp_path, fake_subprocess):
+    checkout = tmp_path / "root" / "openQA" / ".git"
+    checkout.mkdir(parents=True)
+    (checkout / "config").write_text('[remote "origin"]\n')
+    fake_subprocess.on(["git"], stdout="git@github.com:os-autoinst/openQA.git\n")
+
+    assert sut.discover_checkouts([tmp_path / "root"]) == {"os-autoinst/openQA": tmp_path / "root" / "openQA"}
+
+
+def test_ensure_checkout_requires_clone_permission(sut, tmp_path):
+    with pytest.raises(RuntimeError, match="no local checkout for os-autoinst/openQA"):
+        sut.ensure_checkout("os-autoinst/openQA", {}, tmp_path, allow_clone=False)
+
+
+def test_ensure_checkout_reports_a_failed_clone(sut, tmp_path, fake_subprocess):
+    fake_subprocess.on(["git", "clone"], stderr="repository not found", returncode=128)
+
+    with pytest.raises(RuntimeError, match="cannot clone os-autoinst/openQA: repository not found"):
+        sut.ensure_checkout("os-autoinst/openQA", {}, tmp_path, allow_clone=True)
+
+
+def test_confirm_posted_is_false_when_the_state_cannot_be_read(sut, mocker):
+    mocker.patch.object(sut, "pr_state", side_effect=RuntimeError("502"))
+    outcome = make_outcome(sut, ok=True)
+
+    assert sut.confirm_posted(make_candidate(sut), "bot", outcome, dry_run=False) is False
+
+
+def test_infer_owner_reads_the_origin(sut, fake_subprocess):
+    fake_subprocess.on(["git", "remote", "get-url"], stdout="git@github.com:os-autoinst/openQA.git\n")
+
+    assert sut.infer_owner() == "os-autoinst"
+
+
+def test_infer_owner_is_empty_without_a_github_origin(sut, fake_subprocess):
+    fake_subprocess.on(["git", "remote", "get-url"], returncode=1)
+
+    assert not sut.infer_owner()
+
+
+def review_args(*, dry_run: bool = False) -> argparse.Namespace:
+    return argparse.Namespace(
+        no_clone=False,
+        runner="pi",
+        dry_run=dry_run,
+        model="",
+        auto=False,
+        runner_args=[],
+        timeout=60.0,
+    )
+
+
+def test_review_candidate_reports_a_dispatch_failure(sut, tmp_path, mocker, capsys):
+    mocker.patch.object(sut, "ensure_checkout", side_effect=RuntimeError("no runner"))
+
+    ok = sut.review_candidate(
+        make_candidate(sut),
+        make_state(sut),
+        ("C1", CUTOFF),
+        args=review_args(),
+        checkouts={},
+        log_dir=tmp_path,
+        login="bot",
+        skips={},
+        cache=tmp_path,
+    )
+
+    assert ok is False
+    assert "FAILED  os-autoinst/openQA#1: no runner" in capsys.readouterr().err
+
+
+def test_review_candidate_does_not_write_the_ledger_in_a_dry_run(sut, tmp_path, mocker):
+    mocker.patch.object(sut, "ensure_checkout", return_value=tmp_path)
+    mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=True, log="/log/1"))
+    mocker.patch.object(sut, "confirm_posted", return_value=True)
+    record_wait = mocker.patch.object(sut, "record_wait")
+
+    sut.review_candidate(
+        make_candidate(sut),
+        make_state(sut),
+        ("C1", CUTOFF),
+        args=review_args(dry_run=True),
+        checkouts={},
+        log_dir=tmp_path,
+        login="bot",
+        skips={},
+        cache=tmp_path,
+    )
+
+    record_wait.assert_not_called()
+
+
+def test_pause_sleeps(sut, mocker):
+    clock = mocker.Mock()
+    mocker.patch.object(sut, "time", clock)
+
+    sut.pause(2.5)
+
+    clock.sleep.assert_called_once_with(2.5)
