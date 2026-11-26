@@ -9,30 +9,46 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from typing import Any
 
+DEFAULT_BOT = "os-autoinst-review"
+DEFAULT_LIMIT = 30
+PR_FIELDS = "number,title,isDraft,createdAt,updatedAt,author,headRefName,reviews,mergeable,statusCheckRollup,url"
+SUCCESS_STATES = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
+FAILURE_STATES = frozenset({"FAILURE", "ACTION_REQUIRED", "TIMED_OUT", "STARTUP_FAILURE", "ERROR"})
+PENDING_STATES = frozenset({"PENDING", "IN_PROGRESS", "QUEUED"})
+GITHUB_REMOTE = re.compile(r"github\.com[:/]([^/]+/[^/.]+)")
+
 
 def run_gh_as_bot(args: list[str]) -> tuple[int, str, str]:
-    cmd = ["gh-as-bot", *args]
-    res = subprocess.run(cmd, capture_output=True, text=True)
+    """Run gh through the bot wrapper and return (exit code, stdout, stderr)."""
+    res = subprocess.run(["gh-as-bot", *args], check=False, capture_output=True, text=True)
     return res.returncode, res.stdout, res.stderr
 
 
 def get_current_bot_login() -> str:
+    """Return the login of the bot identity, or the org default when the API call fails."""
     rc, out, _ = run_gh_as_bot(["api", "user", "--jq", ".login"])
-    if rc == 0 and out.strip():
-        return out.strip()
-    return "os-autoinst-review"
+    return out.strip() if rc == 0 and out.strip() else DEFAULT_BOT
 
 
-def fetch_prs(repo: str, limit: int = 30) -> list[dict[str, Any]]:
-    fields = (
-        "number,title,isDraft,createdAt,updatedAt,author,headRefName,"
-        "reviews,mergeable,statusCheckRollup,url"
-    )
-    rc, out, err = run_gh_as_bot(["pr", "list", "-R", repo, "--state", "open", "--json", fields, "--limit", str(limit)])
+def fetch_prs(repo: str, limit: int = DEFAULT_LIMIT) -> list[dict[str, Any]]:
+    """Return the open pull requests of repo with the fields the triage needs."""
+    rc, out, err = run_gh_as_bot([
+        "pr",
+        "list",
+        "-R",
+        repo,
+        "--state",
+        "open",
+        "--json",
+        PR_FIELDS,
+        "--limit",
+        str(limit),
+    ])
     if rc != 0:
         print(f"Error fetching PRs for {repo}: {err.strip()}", file=sys.stderr)
         return []
@@ -43,47 +59,35 @@ def fetch_prs(repo: str, limit: int = 30) -> list[dict[str, Any]]:
         return []
 
 
+def check_conclusion(item: dict[str, Any]) -> str:
+    """Return the upper-cased conclusion, state or status of one check run, or "" when it has none."""
+    state = item.get("conclusion") or item.get("state") or item.get("status")
+    return state.upper() if state else ""
+
+
 def analyze_checks(pr: dict[str, Any]) -> str:
+    """Return the combined check status of a pull request: NONE, FAIL, PENDING, PASS or UNKNOWN."""
     rollup = pr.get("statusCheckRollup") or []
     if not rollup:
         return "NONE"
-    conclusions = set()
-    has_pending = False
-    for item in rollup:
-        # CheckRun vs StatusContext
-        state = item.get("conclusion") or item.get("state") or item.get("status")
-        if state:
-            state = state.upper()
-            if state in ("SUCCESS", "NEUTRAL", "SKIPPED"):
-                conclusions.add("SUCCESS")
-            elif state in ("FAILURE", "ACTION_REQUIRED", "TIMED_OUT", "STARTUP_FAILURE", "ERROR"):
-                conclusions.add("FAILURE")
-            elif state in ("PENDING", "IN_PROGRESS", "QUEUED"):
-                has_pending = True
-    if "FAILURE" in conclusions:
+    states = {check_conclusion(item) for item in rollup}
+    if states & FAILURE_STATES:
         return "FAIL"
-    if has_pending:
+    if states & PENDING_STATES:
         return "PENDING"
-    if conclusions == {"SUCCESS"}:
-        return "PASS"
-    return "UNKNOWN"
+    return "PASS" if states & SUCCESS_STATES else "UNKNOWN"
 
 
 def triage_pr(pr: dict[str, Any], bot_login: str) -> dict[str, Any]:
+    """Return the triage record of one pull request."""
     reviews = pr.get("reviews") or []
-    author = pr.get("author", {}).get("login", "")
-    
     reviewers = {r.get("author", {}).get("login") for r in reviews if r.get("author")}
     approvals = [r for r in reviews if r.get("state") == "APPROVED"]
     changes_req = [r for r in reviews if r.get("state") == "CHANGES_REQUESTED"]
-    
-    bot_reviewed = bot_login in reviewers
-    checks_status = analyze_checks(pr)
-    
     return {
         "number": pr["number"],
         "title": pr["title"],
-        "author": author,
+        "author": pr.get("author", {}).get("login", ""),
         "createdAt": pr["createdAt"],
         "updatedAt": pr.get("updatedAt", ""),
         "isDraft": pr.get("isDraft", False),
@@ -92,105 +96,57 @@ def triage_pr(pr: dict[str, Any], bot_login: str) -> dict[str, Any]:
         "approvers": [r.get("author", {}).get("login") for r in approvals],
         "changes_requested": len(changes_req),
         "reviewers": sorted(filter(None, reviewers)),
-        "bot_reviewed": bot_reviewed,
-        "checks": checks_status,
+        "bot_reviewed": bot_login in reviewers,
+        "checks": analyze_checks(pr),
         "url": pr.get("url", ""),
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "-R", "--repo",
-        action="append",
-        dest="repos",
-        help="Target repository (e.g. os-autoinst/os-autoinst-scripts). Can be specified multiple times.",
+def infer_repos() -> list[str]:
+    """Return the repository of the current checkout's origin remote, or exit 1 when there is none."""
+    res = subprocess.run(["git", "remote", "get-url", "origin"], check=False, capture_output=True, text=True)
+    match = GITHUB_REMOTE.search(res.stdout) if res.returncode == 0 else None
+    if match:
+        return [match.group(1)]
+    print(
+        "Error: No repository specified and unable to detect from git remote origin. Use -R owner/repo.",
+        file=sys.stderr,
     )
-    parser.add_argument(
-        "--ready-to-approve",
-        action="store_true",
-        help="Show PRs ready for fast-track review/approval: mergeable, non-draft, checks pass, >=1 approval, 0 changes requested.",
-    )
-    parser.add_argument(
-        "--unreviewed",
-        action="store_true",
-        help="Show PRs not yet reviewed by the bot identity.",
-    )
-    parser.add_argument(
-        "--bot",
-        help="Bot login username to check review status against (default: query gh-as-bot api user).",
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=30,
-        help="Max PRs to fetch per repository (default: 30).",
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        dest="output_json",
-        help="Output raw JSON array instead of a formatted table.",
-    )
+    sys.exit(1)
 
-    args = parser.parse_args()
 
-    repos = args.repos
-    if not repos:
-        # Try inferring from current directory git remote
-        res = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True)
-        if res.returncode == 0 and res.stdout.strip():
-            url = res.stdout.strip()
-            # Parse github.com:owner/repo.git or https://github.com/owner/repo
-            import re
-            m = re.search(r"github\.com[:/]([^/]+/[^/.]+)", url)
-            if m:
-                repos = [m.group(1)]
-        if not repos:
-            print("Error: No repository specified and unable to detect from git remote origin. Use -R owner/repo.", file=sys.stderr)
-            sys.exit(1)
-
-    bot_login = args.bot or get_current_bot_login()
-    all_triaged: list[dict[str, Any]] = []
-
+def collect(repos: list[str], bot_login: str, limit: int) -> list[dict[str, Any]]:
+    """Return the triage record of every open pull request in repos."""
+    triaged = []
     for repo in repos:
-        prs = fetch_prs(repo, limit=args.limit)
-        for pr in prs:
-            t = triage_pr(pr, bot_login)
-            t["repo"] = repo
-            all_triaged.append(t)
+        for pr in fetch_prs(repo, limit=limit):
+            entry = triage_pr(pr, bot_login)
+            entry["repo"] = repo
+            triaged.append(entry)
+    return triaged
 
-    # Filter
-    filtered: list[dict[str, Any]] = []
-    for t in all_triaged:
-        if t["isDraft"]:
-            continue
-        if args.unreviewed and t["bot_reviewed"]:
-            continue
-        if args.ready_to_approve:
-            if t["mergeable"] != "MERGEABLE":
-                continue
-            if t["checks"] not in ("PASS", "NONE"):
-                continue
-            if t["approvals"] < 1:
-                continue
-            if t["changes_requested"] > 0:
-                continue
-        filtered.append(t)
 
-    filtered.sort(key=lambda x: x["createdAt"], reverse=True)
+def matches(entry: dict[str, Any], args: argparse.Namespace) -> bool:
+    """Return whether an entry passes the draft, bot-review and ready-to-approve filters."""
+    if entry["isDraft"]:
+        return False
+    if args.unreviewed and entry["bot_reviewed"]:
+        return False
+    if not args.ready_to_approve:
+        return True
+    return (
+        entry["mergeable"] == "MERGEABLE"
+        and entry["checks"] in {"PASS", "NONE"}
+        and entry["approvals"] >= 1
+        and entry["changes_requested"] == 0
+    )
 
-    if args.output_json:
-        print(json.dumps(filtered, indent=2))
-        return
 
-    if not filtered:
-        print("No matching pull requests found.", file=sys.stderr)
-        return
-
+def print_table(entries: list[dict[str, Any]]) -> None:
+    """Print one table row per triaged pull request."""
     print(f"{'CREATED':10}  {'REPO':32}  {'PR':>5}  {'M-STATUS':10}  {'CHECKS':7}  {'APP':3}  {'BOT':5}  {'TITLE'}")
-    print(f"{'-'*10}  {'-'*32}  {'-'*5}  {'-'*10}  {'-'*7}  {'-'*3}  {'-'*5}  {'-'*40}")
-    for t in filtered:
+    print(f"{'-' * 10}  {'-' * 32}  {'-' * 5}  {'-' * 10}  {'-' * 7}  {'-' * 3}  {'-' * 5}  {'-' * 40}")
+    for t in entries:
         c_date = t["createdAt"][:10]
         repo_str = t["repo"][:32]
         pr_num = f"#{t['number']}"
@@ -200,6 +156,56 @@ def main() -> None:
         bot_rev = "YES" if t["bot_reviewed"] else "no"
         title = t["title"][:50]
         print(f"{c_date:10}  {repo_str:32}  {pr_num:>5}  {m_stat:10}  {checks:7}  {app_cnt:>3}  {bot_rev:5}  {title}")
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse the command line: repositories, filters, bot login, limit and output format."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "-R",
+        "--repo",
+        action="append",
+        dest="repos",
+        help="Target repository (e.g. os-autoinst/os-autoinst-scripts). Can be specified multiple times.",
+    )
+    parser.add_argument(
+        "--ready-to-approve",
+        action="store_true",
+        help="Show PRs ready for fast-track review/approval: mergeable, non-draft, checks pass, >=1 approval, 0 changes requested.",
+    )
+    parser.add_argument("--unreviewed", action="store_true", help="Show PRs not yet reviewed by the bot identity.")
+    parser.add_argument(
+        "--bot", help="Bot login username to check review status against (default: query gh-as-bot api user)."
+    )
+    parser.add_argument(
+        "--limit", type=int, default=DEFAULT_LIMIT, help="Max PRs to fetch per repository (default: 30)."
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="output_json",
+        help="Output raw JSON array instead of a formatted table.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    """Triage the selected repositories and print the matching pull requests."""
+    args = parse_args()
+    repos = args.repos or infer_repos()
+    bot_login = args.bot or get_current_bot_login()
+    filtered = sorted(
+        (entry for entry in collect(repos, bot_login, args.limit) if matches(entry, args)),
+        key=lambda x: x["createdAt"],
+        reverse=True,
+    )
+    if args.output_json:
+        print(json.dumps(filtered, indent=2))
+        return
+    if not filtered:
+        print("No matching pull requests found.", file=sys.stderr)
+        return
+    print_table(filtered)
 
 
 if __name__ == "__main__":
