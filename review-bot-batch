@@ -46,9 +46,15 @@ JQ_REVIEWS = '.[] | "\\(.user.login)\\t\\(.state)\\t\\(.commit_id)"'
 SKIP_MARKER = "--- REVIEW SKIPPED"
 SKIP_LEDGER = "skipped.json"
 WAITS_FILE = "waits.csv"
+WAIT_HEADER = "# v2 stamp,repo,number,cycle,class,owed_since,wait_seconds"
+WAIT_COLUMNS_V2 = 7
+WAIT_COLUMNS_V1 = 6
+WAIT_RETENTION_DAYS = 7
+MAX_WAIT_ROWS = 5000
 FRESH_DAYS = 14
 CLASS_ORDER = ("C1", "C2", "C3", "C4", "C5")
 CLASS_RESERVES = {"C3": 1, "C4": 2}
+LATENCY_CLASSES = ("C1", "C2", "C3", "C4")
 CENSUS_QUERY = """query($q: String!, $cursor: String) {
   search(query: $q, type: ISSUE, first: 100, after: $cursor) {
     pageInfo { hasNextPage endCursor }
@@ -151,6 +157,25 @@ class ReviewOutcome:
     ok: bool
     skipped: bool
     log: Path
+
+
+@dataclass(frozen=True)
+class Wait:
+    """One ledger row: when the PR was reviewed, in which cycle, how urgent and how long it waited."""
+
+    stamp: str
+    cycle: str
+    class_name: str
+    seconds: float
+
+
+@dataclass(frozen=True)
+class Latency:
+    """Latency of one urgency class over a ledger sample."""
+
+    count: int
+    max_seconds: float
+    p95_seconds: float
 
 
 def still_blocked(bot: list[tuple[str, str]]) -> bool:
@@ -363,13 +388,83 @@ def record_skip(path: Path, cand: Candidate, state: PrState, skips: dict[str, st
     save_skips(path, skips)
 
 
-def record_wait(path: Path, cand: Candidate, owed: tuple[str, str], *, now: str = "") -> float:
+def record_wait(path: Path, cand: Candidate, owed: tuple[str, str], *, cycle: str, now: str = "") -> float:
     """Append one reviewed PR to the latency ledger and return how long it waited."""
     seconds = wait_seconds(owed[1], now=now)
     path.parent.mkdir(parents=True, exist_ok=True)
+    fresh = not path.exists() or path.stat().st_size == 0
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(f"{now or stamp_now()},{cand.repo},{cand.number},{owed[0]},{owed[1]},{seconds:.0f}\n")
+        if fresh:
+            handle.write(f"{WAIT_HEADER}\n")
+        row = f"{now or stamp_now()},{cand.repo},{cand.number},{cycle},{owed[0]},{owed[1]},{seconds:.0f}"
+        handle.write(f"{row}\n")
+    trim_waits(path)
     return seconds
+
+
+def trim_waits(path: Path, *, keep: int = 0) -> None:
+    """Drop the oldest rows once the ledger outgrows ``MAX_WAIT_ROWS``, keeping its header."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    rows = [line for line in lines if line and not line.startswith("#")]
+    if len(rows) <= MAX_WAIT_ROWS:
+        return
+    header = [line for line in lines if line.startswith("#")]
+    path.write_text("\n".join([*header, *rows[-(keep or MAX_WAIT_ROWS // 2) :]]) + "\n", encoding="utf-8")
+
+
+def parse_wait(line: str) -> Wait | None:
+    """Read one ledger row, accepting the six-column v1 and the seven-column v2 form."""
+    fields = line.split(",")
+    try:
+        if len(fields) == WAIT_COLUMNS_V2:
+            return Wait(fields[0], fields[3], fields[4], float(fields[6]))
+        if len(fields) == WAIT_COLUMNS_V1:
+            return Wait(fields[0], "", fields[3], float(fields[5]))
+    except ValueError:
+        return None
+    return None
+
+
+def load_waits(path: Path, *, since_days: int = WAIT_RETENTION_DAYS) -> list[Wait]:
+    """Read the ledger rows of the last ``since_days``, skipping headers, junk and old rows."""
+    cutoff = stamp_days_ago(since_days)
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    waits = [parse_wait(line) for line in lines if line and not line.startswith("#")]
+    return [wait for wait in waits if wait and wait.stamp >= cutoff]
+
+
+def latency(waits: list[Wait], class_name: str) -> Latency | None:
+    """Summarise one class: how often it was served, its worst and its 95th percentile wait."""
+    sample = sorted(wait.seconds for wait in waits if wait.class_name == class_name)
+    if not sample:
+        return None
+    rank = min(len(sample) - 1, round(0.95 * (len(sample) - 1)))
+    return Latency(count=len(sample), max_seconds=sample[-1], p95_seconds=sample[rank])
+
+
+def throughput(waits: list[Wait], class_name: str) -> float:
+    """Return the rows of one class per distinct cycle, the rate promise of the backlog class."""
+    sample = [wait for wait in waits if wait.class_name == class_name]
+    return len(sample) / len({wait.cycle for wait in sample}) if sample else 0.0
+
+
+def latency_report(waits: list[Wait]) -> str:
+    """Render the per-class latency and backlog rate of one ledger sample on a single line."""
+    parts = []
+    for class_name in LATENCY_CLASSES:
+        summary = latency(waits, class_name)
+        if summary is None:
+            parts.append(f"{class_name} none")
+        elif class_name == "C4":
+            parts.append(f"C4 {throughput(waits, class_name):.1f}/cycle n={summary.count}")
+        else:
+            worst = format_wait(summary.max_seconds)
+            typical = format_wait(summary.p95_seconds)
+            parts.append(f"{class_name} max {worst} p95 {typical} n={summary.count}")
+    return " · ".join(parts)
 
 
 def parse_shard(value: str) -> tuple[int, int]:
@@ -737,7 +832,7 @@ def review_candidate(
     if outcome.skipped:
         record_skip(cache / SKIP_LEDGER, cand, state, skips)
     if not args.dry_run:
-        record_wait(cache / WAITS_FILE, cand, owed)
+        record_wait(cache / WAITS_FILE, cand, owed, cycle=log_dir.name)
     ok = confirm_posted(cand, login, outcome, dry_run=args.dry_run)
     status = "skip" if outcome.skipped else ("ok" if ok else "FAILED")
     print(f"{status}  {cand.repo}#{cand.number}  {label}  log={outcome.log}", file=sys.stderr)

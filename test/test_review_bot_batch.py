@@ -186,18 +186,92 @@ def test_wait_seconds_measures_the_owed_time(sut):
     assert sut.wait_seconds("2026-11-20T00:00:00Z", now="2026-11-25T00:00:00Z") == 5 * 86400
 
 
-def test_record_wait_appends_the_class_and_the_wait(sut, tmp_path):
-    ledger = tmp_path / "waits.csv"
+def test_record_wait_appends_the_class_the_cycle_and_the_wait(sut, tmp_path):
+    path = tmp_path / "waits.csv"
     sut.record_wait(
-        ledger, make_candidate(sut, number=7779), ("C1", "2026-11-20T00:00:00Z"), now="2026-11-25T00:00:00Z"
+        path,
+        make_candidate(sut, number=7779),
+        ("C1", "2026-11-20T00:00:00Z"),
+        cycle="20261126-111041-000",
+        now="2026-11-25T00:00:00Z",
     )
     sut.record_wait(
-        ledger, make_candidate(sut, number=7775), ("C4", "2026-08-19T00:00:00Z"), now="2026-11-25T00:00:00Z"
+        path,
+        make_candidate(sut, number=7775),
+        ("C4", "2026-08-19T00:00:00Z"),
+        cycle="20261126-111041-000",
+        now="2026-11-25T00:00:00Z",
     )
-    assert ledger.read_text().splitlines() == [
-        "2026-11-25T00:00:00Z,os-autoinst/openQA,7779,C1,2026-11-20T00:00:00Z,432000",
-        "2026-11-25T00:00:00Z,os-autoinst/openQA,7775,C4,2026-08-19T00:00:00Z,8467200",
+    assert path.read_text().splitlines() == [
+        "# v2 stamp,repo,number,cycle,class,owed_since,wait_seconds",
+        "2026-11-25T00:00:00Z,os-autoinst/openQA,7779,20261126-111041-000,C1,2026-11-20T00:00:00Z,432000",
+        "2026-11-25T00:00:00Z,os-autoinst/openQA,7775,20261126-111041-000,C4,2026-08-19T00:00:00Z,8467200",
     ]
+
+
+def test_record_wait_keeps_the_header_and_the_newest_rows_when_trimming(sut, tmp_path, mocker):
+    mocker.patch.object(sut, "MAX_WAIT_ROWS", 4)
+    path = tmp_path / "waits.csv"
+    for number in range(1, 6):
+        sut.record_wait(path, make_candidate(sut, number=number), ("C1", "2026-11-20T00:00:00Z"), cycle="c")
+    lines = path.read_text().splitlines()
+    assert lines[0].startswith("# v2")
+    assert [line.split(",")[2] for line in lines[1:]] == ["4", "5"]
+
+
+def test_load_waits_reads_both_row_versions_and_skips_junk(sut, tmp_path):
+    path = tmp_path / "waits.csv"
+    path.write_text(
+        "# v2 stamp,repo,number,cycle,class,owed_since,wait_seconds\n"
+        "2026-11-25T00:00:00Z,os-autoinst/openQA,7779,cycle-1,C1,2026-11-20T00:00:00Z,432000\n"
+        "2026-11-25T00:00:00Z,os-autoinst/openQA,7775,C4,2026-08-19T00:00:00Z,60\n"
+        "junk\n"
+        "\n"
+    )
+    assert sut.load_waits(path) == [
+        sut.Wait("2026-11-25T00:00:00Z", "cycle-1", "C1", 432000.0),
+        sut.Wait("2026-11-25T00:00:00Z", "", "C4", 60.0),
+    ]
+
+
+def test_load_waits_drops_rows_outside_the_window(sut, tmp_path, mocker):
+    mocker.patch.object(sut, "stamp_days_ago", return_value="2026-11-20T00:00:00Z")
+    path = tmp_path / "waits.csv"
+    path.write_text(
+        "2026-11-19T00:00:00Z,os-autoinst/openQA,1,cycle-1,C1,2026-11-19T00:00:00Z,60\n"
+        "2026-11-25T00:00:00Z,os-autoinst/openQA,2,cycle-1,C1,2026-11-25T00:00:00Z,60\n"
+    )
+    assert [wait.stamp for wait in sut.load_waits(path)] == ["2026-11-25T00:00:00Z"]
+
+
+def test_load_waits_treats_a_missing_ledger_as_empty(sut, tmp_path):
+    assert sut.load_waits(tmp_path / "absent.csv") == []
+
+
+def test_latency_reports_count_worst_and_percentile(sut):
+    waits = [sut.Wait("2026-11-25T00:00:00Z", "c", "C1", seconds) for seconds in (60.0, 120.0, 7200.0, 3.0)]
+    summary = sut.latency(waits, "C1")
+    assert summary == sut.Latency(count=4, max_seconds=7200.0, p95_seconds=7200.0)
+    assert sut.latency(waits, "C2") is None
+
+
+def test_throughput_counts_rows_per_cycle(sut):
+    waits = [
+        sut.Wait("2026-11-25T00:00:00Z", "cycle-1", "C4", 1.0),
+        sut.Wait("2026-11-25T00:00:00Z", "cycle-1", "C4", 1.0),
+        sut.Wait("2026-11-25T00:00:00Z", "cycle-2", "C4", 1.0),
+        sut.Wait("2026-11-25T00:00:00Z", "cycle-2", "C1", 1.0),
+    ]
+    assert sut.throughput(waits, "C4") == pytest.approx(1.5)
+    assert sut.throughput(waits, "C3") == pytest.approx(0.0)
+
+
+def test_latency_report_names_every_class(sut):
+    waits = [
+        sut.Wait("2026-11-25T00:00:00Z", "cycle-1", "C1", 3600.0),
+        sut.Wait("2026-11-25T00:00:00Z", "cycle-1", "C4", 60.0),
+    ]
+    assert sut.latency_report(waits) == "C1 max 1h p95 1h n=1 · C2 none · C3 none · C4 1.0/cycle n=1"
 
 
 def make_state(sut, *, head="h", **fields: Any):
@@ -288,7 +362,7 @@ def test_pr_state_raises_when_reviews_cannot_be_read(sut, mocker):
         sut.pr_state(make_candidate(sut), "os-autoinst-review")
 
 
-def ledger(sut, facts, *, skips=None, cutoff=CUTOFF, **kwargs: Any):
+def owed_from(sut, facts, *, skips=None, cutoff=CUTOFF, **kwargs: Any):
     candidates, owed = sut.owed_work(facts, "os-autoinst-review", skips=skips or {}, cutoff=cutoff, **kwargs)
     return [cand.number for cand in candidates], owed
 
@@ -300,27 +374,27 @@ def test_owed_work_drops_drafts_bot_authors_and_dependency_bots(sut):
         make_facts(sut, number=3, draft=True),
         make_facts(sut, number=4, author="dependabot[bot]"),
     ]
-    assert ledger(sut, facts)[0] == [1]
-    assert ledger(sut, facts, include_bots=True)[0] == [1, 4]
+    assert owed_from(sut, facts)[0] == [1]
+    assert owed_from(sut, facts, include_bots=True)[0] == [1, 4]
 
 
 def test_owed_work_only_blocked_keeps_the_bot_block(sut):
     block = [("CHANGES_REQUESTED", "old", "2026-11-01T00:00:00Z")]
     facts = [make_facts(sut, number=1), make_facts(sut, number=2, reviews=block), make_facts(sut, number=3)]
-    assert ledger(sut, facts, only_blocked=True)[0] == [2]
+    assert owed_from(sut, facts, only_blocked=True)[0] == [2]
 
 
 def test_owed_work_drops_a_head_the_bot_deliberately_skipped(sut):
     facts = [make_facts(sut, number=1, head="h1")]
-    assert ledger(sut, facts, skips={"os-autoinst/openQA#1": "h1"})[0] == []
-    assert ledger(sut, facts, skips={"os-autoinst/openQA#1": "old"})[0] == [1]
-    assert ledger(sut, facts, skips={"os-autoinst/openQA#1": "h1"}, recheck=True)[0] == [1]
+    assert owed_from(sut, facts, skips={"os-autoinst/openQA#1": "h1"})[0] == []
+    assert owed_from(sut, facts, skips={"os-autoinst/openQA#1": "old"})[0] == [1]
+    assert owed_from(sut, facts, skips={"os-autoinst/openQA#1": "h1"}, recheck=True)[0] == [1]
 
 
 def test_owed_work_reports_the_class_and_the_owed_since(sut):
     moved = [("CHANGES_REQUESTED", "old", "2026-11-01T00:00:00Z")]
     facts = [make_facts(sut, number=1, reviews=moved), make_facts(sut, number=4, created="2026-08-19T00:00:00Z")]
-    _, owed = ledger(sut, facts)
+    _, owed = owed_from(sut, facts)
     assert owed == {
         ("os-autoinst/openQA", 1): ("C1", "2026-11-15T00:00:00Z"),
         ("os-autoinst/openQA", 4): ("C4", "2026-08-19T00:00:00Z"),
@@ -330,14 +404,14 @@ def test_owed_work_reports_the_class_and_the_owed_since(sut):
 def test_owed_work_recheck_adds_the_c5_class(sut):
     covered = [("APPROVED", "h1", "2026-11-15T00:00:00Z")]
     facts = [make_facts(sut, number=1, reviews=covered)]
-    assert ledger(sut, facts)[0] == []
-    assert ledger(sut, facts, recheck=True)[1] == {("os-autoinst/openQA", 1): ("C5", "2026-11-15T00:00:00Z")}
+    assert owed_from(sut, facts)[0] == []
+    assert owed_from(sut, facts, recheck=True)[1] == {("os-autoinst/openQA", 1): ("C5", "2026-11-15T00:00:00Z")}
 
 
 @pytest.mark.parametrize(("shard", "expected"), [((1, 3), [1, 4]), ((2, 3), [2]), ((3, 3), [3])])
 def test_owed_work_shards_partition_the_universe(sut, shard, expected):
     facts = [make_facts(sut, number=n) for n in range(1, 5)]
-    assert ledger(sut, facts, shard=shard)[0] == expected
+    assert owed_from(sut, facts, shard=shard)[0] == expected
 
 
 def test_select_owed_reserves_slots_for_the_backlog(sut):
