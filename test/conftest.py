@@ -4,12 +4,23 @@ import importlib.machinery
 import importlib.util
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
+import responses
 
 ROOT = Path(__file__).resolve().parent.parent
+SCOPE_GUARD = "test_coverage_scope.py"
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Run the coverage scope guard after every other test so it sees the complete data."""
+    others = [item for item in items if item.path.name != SCOPE_GUARD]
+    guard = [item for item in items if item.path.name == SCOPE_GUARD]
+    items[:] = [*others, *guard]
 
 
 @pytest.fixture
@@ -48,25 +59,83 @@ class FakeSubprocess:
         """Return the recorded commands that start with prefix."""
         return [cmd for cmd in self.calls if cmd[: len(prefix)] == list(prefix)]
 
-    def _answer(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
-        self.calls.append(list(cmd))
+    def _answer(self, cmd: list[str] | str) -> subprocess.CompletedProcess[str]:
+        recorded = cmd.split() if isinstance(cmd, str) else list(cmd)
+        self.calls.append(recorded)
         for prefix, stdout, stderr, returncode in self._responses:
-            if list(cmd)[: len(prefix)] == prefix:
+            if recorded[: len(prefix)] == prefix:
                 return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
-        msg = f"unexpected command: {cmd}"
+        msg = f"unexpected command: {recorded}"
         raise AssertionError(msg)
 
     def _run(self, cmd, *_args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        completed = self._answer(list(cmd))
+        completed = self._answer(cmd)
         if kwargs.get("check") and completed.returncode != 0:
             raise subprocess.CalledProcessError(completed.returncode, cmd, completed.stdout, completed.stderr)
         return completed
 
     def _call(self, cmd, *_args: Any, **_kwargs: Any) -> int:
-        return self._answer(list(cmd)).returncode
+        return self._answer(cmd).returncode
 
 
 @pytest.fixture
 def fake_subprocess(mocker) -> FakeSubprocess:
     """Return a FakeSubprocess with subprocess.run and subprocess.call patched."""
     return FakeSubprocess(mocker)
+
+
+class FakeHttpx:
+    """Answer httpx requests from a path table and record every request that was made."""
+
+    def __init__(self, mocker) -> None:
+        """Patch httpx.Client and httpx.AsyncClient to talk to this instance's table."""
+        self.requests: list[httpx.Request] = []
+        self._routes: dict[str, httpx.Response] = {}
+        self._async_client_cls = httpx.AsyncClient
+        self._client_cls = httpx.Client
+        self._transport = httpx.MockTransport(self._handle)
+        mocker.patch.object(httpx, "AsyncClient", self._async_client)
+        mocker.patch.object(httpx, "Client", self._sync_client)
+
+    def on(self, path: str, *, json_body: Any = None, text: str = "", status_code: int = 200) -> None:
+        """Register the answer for a URL path, as JSON or as plain text."""
+        response = (
+            httpx.Response(status_code, json=json_body)
+            if json_body is not None
+            else httpx.Response(status_code, text=text)
+        )
+        self._routes[path] = response
+
+    def paths(self) -> list[str]:
+        """Return the paths of the recorded requests in call order."""
+        return [request.url.path for request in self.requests]
+
+    def raw_paths(self) -> list[str]:
+        """Return the percent-encoded paths of the recorded requests in call order."""
+        return [request.url.raw_path.decode() for request in self.requests]
+
+    def _handle(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if request.url.path not in self._routes:
+            msg = f"unexpected httpx request: {request.method} {request.url.path}"
+            raise AssertionError(msg)
+        return self._routes[request.url.path]
+
+    def _async_client(self, **kwargs: Any) -> httpx.AsyncClient:
+        return self._async_client_cls(transport=self._transport, **kwargs)
+
+    def _sync_client(self, **kwargs: Any) -> httpx.Client:
+        return self._client_cls(transport=self._transport, **kwargs)
+
+
+@pytest.fixture
+def fake_httpx(mocker) -> FakeHttpx:
+    """Return a FakeHttpx with httpx.Client and httpx.AsyncClient patched."""
+    return FakeHttpx(mocker)
+
+
+@pytest.fixture
+def fake_requests() -> Iterator[responses.RequestsMock]:
+    """Return a responses mock that answers and records requests calls."""
+    with responses.RequestsMock() as mock:
+        yield mock
