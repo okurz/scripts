@@ -1,20 +1,14 @@
 """Tests for github-all-prs: date parsing and the review-request filters."""
 
-import importlib.machinery
-import importlib.util
-from pathlib import Path
-
 import pytest
 
-SCRIPT_PATH = Path(__file__).resolve().parent.parent / "github-all-prs"
-loader = importlib.machinery.SourceFileLoader("github_all_prs", str(SCRIPT_PATH))
-spec = importlib.util.spec_from_loader(loader.name, loader)
-assert spec is not None
-sut = importlib.util.module_from_spec(spec)
-loader.exec_module(sut)
+
+@pytest.fixture
+def sut(load_script):
+    return load_script("github-all-prs")
 
 
-def test_parse_date():
+def test_parse_date(sut):
     assert sut.parse_date("").timestamp() == 0
     assert sut.parse_date("2026-09-28T08:00:00").tzinfo is not None
 
@@ -143,7 +137,7 @@ def test_parse_date():
         ),
     ],
 )
-def test_has_unanswered_changes_requested(desc, pr, me, expected):
+def test_has_unanswered_changes_requested(sut, desc, pr, me, expected):
     assert sut.has_unanswered_changes_requested(pr, me) is expected, desc
 
 
@@ -214,7 +208,7 @@ def test_has_unanswered_changes_requested(desc, pr, me, expected):
         ),
     ],
 )
-def test_needs_review_filter(desc, pr, me, expected):
+def test_needs_review_filter(sut, desc, pr, me, expected):
     assert sut.needs_review_filter(pr, me) == expected, desc
 
 
@@ -294,5 +288,5 @@ def test_needs_review_filter(desc, pr, me, expected):
         ),
     ],
 )
-def test_needs_work_filter(desc, pr, me, expected):
+def test_needs_work_filter(sut, desc, pr, me, expected):
     assert sut.needs_work_filter(pr, me) == expected, desc
