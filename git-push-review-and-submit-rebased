@@ -2,7 +2,7 @@
 # push a commit for review and directly mark it as verified and code-reviewed
 # with comment "Rebased" and submit for simple commit rebasing to submit
 #
-git push-review && for i in $(git log --format=format:'%H' gerrit/master..) ; do ssh gerrit gerrit review --verified=+1 --code-review=+2 -m '"Rebased"' --submit $i ; done
+git push-review && for i in $(git log --format=format:'%H' gerrit/master..) ; do ssh gerrit gerrit review --verified=+1 --code-review=+2 -m '"Rebased"' --submit "$i" ; done
 
 # This was the old approach but it just submits the most recent commit, not
 # all that are missing

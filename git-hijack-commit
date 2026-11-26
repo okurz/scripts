@@ -1,2 +1,2 @@
 #!/bin/sh -e
-git root && git amend && git reset --soft HEAD^ && git commit -F $(git root)/.git/COMMIT_EDITMSG
+git root && git amend && git reset --soft HEAD^ && git commit -F "$(git root)/.git/COMMIT_EDITMSG"
