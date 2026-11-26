@@ -11,7 +11,8 @@ unresolvables_per_pkg() {
     local prj="${prj:-"home:okurz:try_openqa_leap16"}"
     local repo="${repo:-"16.0"}"
     local arch="${arch:-"$arch"}"
-    local pkgs="$(list_pkgs "$prj")"
+    local pkgs
+    pkgs="$(list_pkgs "$prj")"
     osc buildinfo "$prj" "$pkg" "$repo" "$arch" | xml_grep --nowrap --text_only error | sed -n "s/nothing provides //gp"
 }
 
@@ -26,7 +27,7 @@ unresolvables_in_prj() {
        # for some with exact version which we should strip. Also we should remove
        # packages already in this project but unresolved
        unresolvables_per_pkg "$prj" "$pkg" "$repo" "$arch"
-   done <<<$pkgs
+   done <<<"$pkgs"
 }
 
 find_and_submit_dependencies() {
@@ -34,7 +35,8 @@ find_and_submit_dependencies() {
     local prj="${prj:-"home:okurz:try_openqa_leap16"}"
     local repo="${repo:-"16.0"}"
     local arch="${arch:-"$arch"}"
-    local pkgs="$(list_pkgs "$prj")"
+    local pkgs
+    pkgs="$(list_pkgs "$prj")"
     local base_prj="${base_prj:-"openSUSE:Factory"}"
     unresolvables_in_prj "$prj" "$repo" "$arch" | tee unresolvables
     # put each entry on separate line
@@ -51,21 +53,22 @@ find_and_submit_dependencies() {
     # implicitly refresh the zypper cache everytime so inefficient. One way to
     # solve would be spawn the container and keep it running until all tasks are
     # done and cleanup on exit
-    for i in $(sed -n -e "s/, /\n/g" -e "s/unresolvable: //p" unresolvables | sort -u); do
+    while read -r i; do
         zypper  --no-refresh --xmlout se --provides --match-exact "$i" | xml_grep --nowrap solvable | sed -n "s/^.*name=\"\([^\"]*\).*$/\1/p"
-    done | tee unresolves_provides
-    for pkg in $(sort -u unresolves_provides); do
+    done < <(sed -n -e "s/, /\n/g" -e "s/unresolvable: //p" unresolvables | sort -u) | tee unresolves_provides
+    while read -r pkg; do
         # this will throw errors for already existing packages in target as
         # well as for sub-packages
         osc linkpac "$base_prj" "$pkg" "$prj"
-    done
+    done < <(sort -u unresolves_provides)
 }
 
 resolve_dependencies_until_stable() {
     local prj="${prj:-"home:okurz:try_openqa_leap16"}"
     local repo="${repo:-"16.0"}"
     local arch="${arch:-"x86_64"}"
-    local pkgs="$(list_pkgs "$prj")"
+    local pkgs
+    pkgs="$(list_pkgs "$prj")"
     local base_prj="${base_prj:-"openSUSE:Factory"}"
     while :; do
         unresolvables=$(unresolvables_in_prj "$prj")

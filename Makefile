@@ -18,8 +18,13 @@ PY_SCRIPTS ?= gh-pr-triage gitea-review-cleanup github-all-prs mac-to-ipv6 obs-p
 	git-plans-dir git-worktree-audit
 PY_ALL = $(PY_FILES) $(PY_SCRIPTS)
 
-SHELL_SCRIPTS ?= gh-as-bot git-delete-no-content-branches git-hooks/post-checkout git-rebase-all-branches \
-	git-review git-review-branch git-upstream-base glab-as-bot hosts-yaml-to-aaaa vimeo-review-dl
+SHELL_SCRIPTS ?= gh-as-bot git-delete-no-content-branches git-hijack-commit git-hooks/post-checkout \
+	git-pr-last git-push-review-and-submit-rebased git-rebase-all-branches git-review git-review-branch \
+	git-stack-list git-upstream-base glab-as-bot hosts-yaml-to-aaaa openqa-client-record-manual-test \
+	openqa-clone-set openqa-find-longest-running-test-modules openqa-get-qem-bot-blocking-jobs \
+	openqa-tag-build openqa-trigger-mm openqa_client_o3 openqa_client_osd openqa_clone_job_o3 \
+	openqa_clone_job_osd osc-list-unresolvables osc-list-unresolvables-per-pkg \
+	osc-staging-link-all-missing-deps osc-submit-dependencies osc-submit-dependencies2 vimeo-review-dl
 
 .PHONY: help
 help: ## Display this help
