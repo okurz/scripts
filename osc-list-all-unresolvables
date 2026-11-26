@@ -15,7 +15,6 @@ import logging
 import subprocess
 import sys
 
-logging.basicConfig()
 log = logging.getLogger(sys.argv[0] if __name__ == "__main__" else __name__)
 
 MAX_VERBOSE = 4
@@ -66,6 +65,7 @@ def list_unresolvables() -> None:
 
 def main() -> None:
     """Run the query for the given project, the openQA query is still to be implemented."""
+    logging.basicConfig()
     args = parse_args()
     call(
         ["ssh", args.openqa_host, f'sudo -u geekotest psql -t --command="{sql_query}" openqa'],

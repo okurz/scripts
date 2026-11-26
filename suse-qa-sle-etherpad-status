@@ -11,7 +11,6 @@ import subprocess
 import sys
 import urllib.parse
 
-logging.basicConfig()
 log = logging.getLogger(sys.argv[0] if __name__ == "__main__" else __name__)
 
 MAX_VERBOSE = 4
@@ -55,6 +54,7 @@ def call(cmds: str, *, dry_run: bool = False) -> int:
 
 def main() -> None:
     """Export the Etherpad status page to markdown, colour the status words and render HTML."""
+    logging.basicConfig()
     args = parse_args()
     url = urllib.parse.urljoin(args.etherpad_url, "export/markdown")
     cmd = "curl -s " + url + r" | grep -B 3 -P 'Status.*(RED|AMBER|GREEN)' | sed -n -e 's/\s*Status:\s*//p' -e '/^#/p'"

@@ -12,7 +12,6 @@ import logging
 import subprocess
 import sys
 
-logging.basicConfig()
 log = logging.getLogger(sys.argv[0] if __name__ == "__main__" else __name__)
 
 MAX_VERBOSE = 4
@@ -52,6 +51,7 @@ def call(cmds: list[str], *, dry_run: bool = False) -> int:
 
 def main() -> None:
     """Query the openQA database over ssh for the latest jobs that ran a module."""
+    logging.basicConfig()
     args = parse_args()
     sql_query = f"select distinct distri,version,flavor,test,arch,machine from jobs where id in (select job_id from job_modules where (name='{args.module}')and t_updated > now() - interval '{args.age}') limit {args.limit};"
     call(

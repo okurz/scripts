@@ -7,13 +7,23 @@ import sys
 
 MIN_ARGV = 2
 
-mac = input("Enter mac of host: ") if len(sys.argv) < MIN_ARGV else sys.argv[1]
-prefix = os.environ["prefix"] or ""  # noqa: SIM112 - env var name is the user interface
-byte_strings = mac.split(":")
-fffe_inserted = [*byte_strings[:3], "ff", "fe", *byte_strings[3:]]
-flipped_bit = hex(int(fffe_inserted[0], 16) ^ 0b00000010)
-fffe_inserted[0] = flipped_bit.split("x", 1)[1]
-v6_notation = list(zip(fffe_inserted[0::2], fffe_inserted[1::2], strict=False))
-v6_notation = ["".join(x) for x in v6_notation]
-v6_notation = ":".join(v6_notation)
-print(prefix + v6_notation)
+
+def mac_to_ipv6(mac: str) -> str:
+    """Return the IPv6 interface identifier derived from a colon-separated MAC address."""
+    byte_strings = mac.split(":")
+    fffe_inserted = [*byte_strings[:3], "ff", "fe", *byte_strings[3:]]
+    flipped_bit = hex(int(fffe_inserted[0], 16) ^ 0b00000010)
+    fffe_inserted[0] = flipped_bit.split("x", 1)[1]
+    groups = ["".join(pair) for pair in zip(fffe_inserted[0::2], fffe_inserted[1::2], strict=False)]
+    return ":".join(groups)
+
+
+def main() -> None:
+    """Print the address for the MAC from argv or stdin, prefixed by $prefix."""
+    mac = input("Enter mac of host: ") if len(sys.argv) < MIN_ARGV else sys.argv[1]
+    prefix = os.environ["prefix"] or ""  # noqa: SIM112 - env var name is the user interface
+    print(prefix + mac_to_ipv6(mac))
+
+
+if __name__ == "__main__":
+    main()

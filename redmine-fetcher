@@ -26,7 +26,11 @@ def load_config() -> tuple[str | None, str | None]:
     return None, None
 
 
-CONFIG_HOST, CONFIG_TOKEN = load_config()
+def resolve_credentials() -> tuple[str, str | None]:
+    """Return the host and token, preferring the environment over ~/.query_redminerc."""
+    config_host, config_token = load_config()
+    host = os.environ.get("REDMINE_HOST", config_host) or DEFAULT_HOST
+    return host, os.environ.get("REDMINE_API_TOKEN", config_token)
 
 
 def clean_host(host: str) -> str:
@@ -77,8 +81,7 @@ def print_journals(journals: list[dict[str, Any]]) -> None:
 
 def fetch_ticket(ticket_id: str) -> None:
     """Fetch a Redmine issue with its journals, print it, and exit 1 on request errors."""
-    host = os.environ.get("REDMINE_HOST", CONFIG_HOST) or DEFAULT_HOST
-    token = os.environ.get("REDMINE_API_TOKEN", CONFIG_TOKEN)
+    host, token = resolve_credentials()
     headers = {"X-Redmine-API-Key": token} if token else {}
 
     try:
