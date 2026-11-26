@@ -92,6 +92,14 @@ def refs_at_risk(directory: Path, primary: Path, namespace: str) -> list[str]:
     return at_risk
 
 
+def parse_counts(output: str | None) -> dict[str, int]:
+    """Return the behind/ahead counts of a rev-list --count line, empty when it is not a pair."""
+    counts = (output or "").split()
+    if len(counts) != len(COUNT_FIELDS):
+        return {}
+    return dict(zip(COUNT_FIELDS, map(int, counts), strict=True))
+
+
 def head_state(directory: Path) -> dict[str, Any]:
     """Report the head branch, its upstream and ahead/behind counts."""
     head = git_output(directory, "symbolic-ref", "--short", "HEAD") or "detached"
@@ -102,9 +110,7 @@ def head_state(directory: Path) -> dict[str, Any]:
     if not upstream:
         return state
     state["upstream"] = upstream
-    counts = (git_output(directory, "rev-list", "--left-right", "--count", f"{upstream}...HEAD") or "").split()
-    if len(counts) == len(COUNT_FIELDS):
-        state.update(dict(zip(COUNT_FIELDS, map(int, counts), strict=True)))
+    state.update(parse_counts(git_output(directory, "rev-list", "--left-right", "--count", f"{upstream}...HEAD")))
     return state
 
 

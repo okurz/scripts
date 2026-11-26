@@ -208,3 +208,33 @@ def test_outside_a_repository_without_primary_is_a_usage_error(load_script, caps
 
     assert code == 2
     assert "not a git repository" in capsys.readouterr().err
+
+
+def test_staged_change_counts_as_staged_only(checkouts, load_script, capsys) -> None:
+    primary, peer = checkouts
+    (peer / "staged.txt").write_text("staged\n")
+    git(peer, "add", "staged.txt")
+
+    code, report = audit_json(load_script, capsys, "--primary", str(primary), str(peer))
+
+    assert code == 0
+    assert report["directories"][0]["dirty"] == {"staged": 1, "modified": 0, "untracked": 0, "stashes": 0}
+
+
+def test_text_report_skips_a_missing_directory(checkouts, load_script, capsys, tmp_path) -> None:
+    primary, _ = checkouts
+    missing = tmp_path / "gone"
+
+    code, text = audit(load_script, capsys, "--primary", str(primary), str(missing))
+
+    assert code == 0
+    assert f"{missing} (missing)" in text
+    assert "head:" not in text
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [("3\t4", {"behind": 3, "ahead": 4}), ("", {}), (None, {}), ("7", {})],
+)
+def test_parse_counts_reads_the_rev_list_pair(load_script, output, expected) -> None:
+    assert load_script("git-worktree-audit").parse_counts(output) == expected
