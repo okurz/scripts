@@ -2,11 +2,12 @@
 
 """Find all 'unresolvables' for an OBS project.
 
-This can be used to identify which additional direct and indirect dependencies of packages in a project need to be submitted additionally.
+This can be used to identify which additional direct and indirect dependencies of packages in
+a project need to be submitted additionally.
 
 Examples:
   $0 home:okurz:my_project
-  $0 home:okurz:my_project my_package
+  $0 home:okurz:my_project --package my_package
 
 """
 
@@ -14,10 +15,17 @@ import argparse
 import logging
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 
 log = logging.getLogger(sys.argv[0] if __name__ == "__main__" else __name__)
 
 MAX_VERBOSE = 4
+DEFAULT_ARCH = "x86_64"
+UNRESOLVABLE_PREFIX = "nothing provides "
+
+
+class OscError(RuntimeError):
+    """Raised when osc fails or answers something that is not a project or buildinfo document."""
 
 
 class CustomFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
@@ -25,20 +33,18 @@ class CustomFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescri
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments and set the log level from --verbose."""
+    """Parse the command line: project, package, repository, architecture and verbosity."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=CustomFormatter)
+    parser.add_argument("project", help="OBS project to inspect, e.g. home:okurz:my_project")
+    parser.add_argument("--package", help="Only inspect this package instead of every package of the project")
+    parser.add_argument("--repo", help="Repository to inspect, defaults to the project's first one")
+    parser.add_argument("--arch", default=DEFAULT_ARCH, help="Architecture to inspect")
     parser.add_argument(
         "-v",
         "--verbose",
         help="Increase verbosity level, specify multiple times to increase verbosity",
         action="count",
         default=1,
-    )
-    parser.add_argument("--dry-run", action="store_true", help="Do not do any write actions on any target")
-    parser.add_argument("--project", help="OBS project to list packages for")
-    parser.add_argument(
-        "--package",
-        help="Only list unresolvables for specified package, otherwise shows for all packages in the project",
     )
     args = parser.parse_args()
     verbose_to_log = {0: logging.CRITICAL, 1: logging.ERROR, 2: logging.WARNING, 3: logging.INFO, 4: logging.DEBUG}
@@ -47,27 +53,78 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def call(cmds: list[str], *, dry_run: bool = False) -> int:
-    """Run cmds, or echo them as simulated when dry_run is set."""
-    log.debug("call: %s", cmds)
-    return subprocess.call((["echo", "Simulating: "] if dry_run else []) + cmds)
+def osc_xml(args: list[str]) -> ET.Element:
+    """Return the parsed XML that osc prints for args, or raise OscError when it prints none."""
+    log.debug("osc %s", " ".join(args))
+    result = subprocess.run(["osc", *args], check=False, capture_output=True, text=True)
+    if not result.stdout.strip():
+        msg = f"osc {args[0]} failed: {result.stderr.strip() or 'no output'}"
+        raise OscError(msg)
+    try:
+        return ET.fromstring(result.stdout)
+    except ET.ParseError as e:
+        msg = f"osc {args[0]} printed no XML: {e}"
+        raise OscError(msg) from e
 
 
-def default_repo(prj: str) -> None:
-    """Run osc meta for the project, the repository lookup is still to be implemented."""
-    meta = call(["osc", "meta", "prj", prj])
-    assert meta
+def project_repositories(project: str) -> list[str]:
+    """Return the repository names of a project, in the order osc lists them."""
+    meta = osc_xml(["meta", "prj", project])
+    return [name for repo in meta.iter("repository") if (name := repo.get("name"))]
 
 
-def list_unresolvables() -> None:
-    """Stub: the unresolvable listing is not implemented yet."""
+def project_packages(project: str) -> list[str]:
+    """Return the package names of a project."""
+    log.debug("osc ls %s", project)
+    result = subprocess.run(["osc", "ls", project], check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        msg = f"osc ls failed: {result.stderr.strip() or 'no output'}"
+        raise OscError(msg)
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def unresolvables(project: str, package: str, repo: str, arch: str) -> list[str]:
+    """Return the missing provides of one package in one repository and architecture."""
+    buildinfo = osc_xml(["buildinfo", project, package, repo, arch])
+    missing = []
+    for error in buildinfo.iter("error"):
+        text = (error.text or "").strip()
+        if text.startswith(UNRESOLVABLE_PREFIX):
+            missing.append(text.removeprefix(UNRESOLVABLE_PREFIX))
+    return missing
+
+
+def choose_repo(args: argparse.Namespace) -> str:
+    """Return the repository to inspect, defaulting to the project's first one."""
+    repo = args.repo or (project_repositories(args.project) or [None])[0]
+    if repo is None:
+        msg = f"{args.project} defines no repository"
+        raise OscError(msg)
+    return repo
+
+
+def report(project: str, packages: list[str], repo: str, arch: str) -> dict[str, list[str]]:
+    """Return the missing provides per package, keeping the packages that have none."""
+    return {package: unresolvables(project, package, repo, arch) for package in packages}
 
 
 def main() -> None:
-    """Run the query for the given project, the openQA query is still to be implemented."""
+    """Print the missing provides of every selected package of the project."""
     logging.basicConfig()
     args = parse_args()
-    call(
-        ["ssh", args.openqa_host, f'sudo -u geekotest psql -t --command="{sql_query}" openqa'],
-        dry_run=args.dry_run,
-    )
+    try:
+        repo = choose_repo(args)
+        packages = [args.package] if args.package else project_packages(args.project)
+        unresolvables_per_package = report(args.project, packages, repo, args.arch)
+    except OscError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    print(f"# {args.project} {repo} {args.arch}")
+    for package, missing in unresolvables_per_package.items():
+        print(f"## pkg: {package}")
+        for item in missing:
+            print(item)
+
+
+if __name__ == "__main__":
+    main()

@@ -130,8 +130,6 @@ ignore = [
     "S314",          # accepted: OBS/IBS metadata is trusted, defusedxml buys nothing
     "S405",          # accepted: same as S314
     "S608",          # accepted: psql -c string in openqa-db_query_last_use_of_module
-    "S101",          # 001_F1 (assert in osc-list-all-unresolvables stub)
-    "F821",          # 001_F1 (undefined sql_query in the same stub)
 ]
 
 [tool.ruff.lint.mccabe]
@@ -172,6 +170,7 @@ max-complexity = 9
 "redmine-fetcher" = ["T201"]
 "review-bot-batch" = ["T201", "PLR0913"]
 "gh-pr-triage" = ["T201"]
+"osc-list-all-unresolvables" = ["T201"]
 "git-worktree-audit" = ["T201"]
 "git-plans-dir" = ["T201"]
 
