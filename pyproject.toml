@@ -52,6 +52,12 @@ omit = [
 fail_under = 71
 show_missing = true
 skip_covered = true
+exclude_lines = [
+    "if __name__ == \"__main__\":",
+    "if TYPE_CHECKING:",
+    "pragma: no cover",
+    "raise NotImplementedError",
+]
 
 [tool.pytest.ini_options]
 addopts = "-p no:anyio -p no:doctest -p no:pastebin -p no:nose"
@@ -150,6 +156,8 @@ max-complexity = 9
     "too-many-positional-arguments",
     "undocumented-public-function",
     "boolean-type-hint-positional-argument",
+    # the coverage scope guard reads the live pytest-cov data, which only the private API exposes
+    "private-member-access",
 ]
 "gitea-review-cleanup" = [
     "B008",
