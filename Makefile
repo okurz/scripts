@@ -84,9 +84,14 @@ checkstyle: ## Run fast style and static analysis checks
 checkstyle-all: ## Run all style and static analysis checks
 	@$(MAKE) -j checkstyle check-types check-code-health
 
+.PHONY: check-coverage-scope
+check-coverage-scope: ## Verify every tracked Python file is at 100% statement and branch coverage
+	$(PYTHON_RUN) python3 test/coverage_scope.py
+
 .PHONY: test
 test: ## Run all tests with coverage analysis and all style checks
 	@$(MAKE) -j test-unit checkstyle-all
+	@$(MAKE) check-coverage-scope
 
 .PHONY: test-no-coverage
 test-no-coverage: ## Run all tests *without* coverage analysis (faster)

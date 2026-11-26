@@ -48,8 +48,7 @@ omit = [
 ]
 
 [tool.coverage.report]
-# Ratchet baseline measured on 2026-10-23; plan 001_I raises this to 100
-fail_under = 71
+fail_under = 100
 show_missing = true
 skip_covered = true
 exclude_lines = [
@@ -181,6 +180,7 @@ max-complexity = 9
 "osc-list-all-unresolvables" = ["T201"]
 "git-worktree-audit" = ["T201"]
 "git-plans-dir" = ["T201"]
+"test/coverage_scope.py" = ["T201"]
 
 [tool.ruff.format]
 docstring-code-format = true

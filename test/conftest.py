@@ -13,14 +13,6 @@ import pytest
 import responses
 
 ROOT = Path(__file__).resolve().parent.parent
-SCOPE_GUARD = "test_coverage_scope.py"
-
-
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Run the coverage scope guard after every other test so it sees the complete data."""
-    others = [item for item in items if item.path.name != SCOPE_GUARD]
-    guard = [item for item in items if item.path.name == SCOPE_GUARD]
-    items[:] = [*others, *guard]
 
 
 @pytest.fixture
