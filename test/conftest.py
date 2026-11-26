@@ -56,8 +56,11 @@ class FakeSubprocess:
         msg = f"unexpected command: {cmd}"
         raise AssertionError(msg)
 
-    def _run(self, cmd, *_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        return self._answer(list(cmd))
+    def _run(self, cmd, *_args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        completed = self._answer(list(cmd))
+        if kwargs.get("check") and completed.returncode != 0:
+            raise subprocess.CalledProcessError(completed.returncode, cmd, completed.stdout, completed.stderr)
+        return completed
 
     def _call(self, cmd, *_args: Any, **_kwargs: Any) -> int:
         return self._answer(list(cmd)).returncode

@@ -5,13 +5,11 @@ import requests
 
 
 @pytest.fixture
-def sut(load_script, monkeypatch):
-    sut = load_script("redmine-fetcher")
-    sut.CONFIG_HOST = None
-    sut.CONFIG_TOKEN = None
+def sut(load_script, monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("REDMINE_HOST", raising=False)
     monkeypatch.delenv("REDMINE_API_TOKEN", raising=False)
-    return sut
+    return load_script("redmine-fetcher")
 
 
 ISSUE = {
@@ -87,3 +85,54 @@ def test_main_exits_one_without_ticket_id(sut, capsys, monkeypatch):
     with pytest.raises(SystemExit):
         sut.main()
     assert "Usage:" in capsys.readouterr().out
+
+
+def test_load_config_reads_host_and_token_from_the_config_file(sut, tmp_path):
+    (tmp_path / ".query_redminerc").write_text("redmine-host = progress.example.org\nredmine-token=t0ken\n")
+
+    assert sut.load_config() == ("progress.example.org", "t0ken")
+
+
+def test_load_config_ignores_lines_without_a_separator(sut, tmp_path):
+    (tmp_path / ".query_redminerc").write_text("garbage\nredmine-token=t0ken\n")
+
+    assert sut.load_config() == (None, "t0ken")
+
+
+def test_load_config_without_a_config_file_is_empty(sut):
+    assert sut.load_config() == (None, None)
+
+
+def test_load_config_of_an_empty_file_is_empty(sut, tmp_path):
+    (tmp_path / ".query_redminerc").write_text("")
+
+    assert sut.load_config() == (None, None)
+
+
+def test_resolve_credentials_prefers_the_environment(sut, tmp_path, monkeypatch):
+    (tmp_path / ".query_redminerc").write_text("redmine-host=config.example.org\nredmine-token=config-token\n")
+    monkeypatch.setenv("REDMINE_HOST", "env.example.org")
+    monkeypatch.setenv("REDMINE_API_TOKEN", "env-token")
+
+    assert sut.resolve_credentials() == ("env.example.org", "env-token")
+
+
+def test_resolve_credentials_falls_back_to_the_default_host(sut):
+    assert sut.resolve_credentials() == (sut.DEFAULT_HOST, None)
+
+
+def test_fetch_ticket_without_a_token_sends_no_api_key_header(sut, mocker):
+    get = mocker.patch.object(sut.requests, "get", return_value=mocker.MagicMock())
+
+    sut.fetch_ticket("249076")
+
+    assert "X-Redmine-API-Key" not in get.call_args.kwargs["headers"]
+
+
+def test_main_fetches_the_normalized_ticket_id(sut, mocker, monkeypatch):
+    fetch_ticket = mocker.patch.object(sut, "fetch_ticket")
+    monkeypatch.setattr("sys.argv", ["redmine-fetcher", "https://progress.opensuse.org/issues/249076/"])
+
+    sut.main()
+
+    fetch_ticket.assert_called_once_with("249076")

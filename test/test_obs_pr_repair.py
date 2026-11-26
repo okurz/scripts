@@ -1117,3 +1117,147 @@ def test_main_dispatch_flows() -> None:
     )
     with patch.object(sut, "diagnose", return_value=unhealthy_report):
         assert sut.main(base_args) == 2
+
+
+BASE_ARGS = [
+    "--repo",
+    "os-autoinst/openQA",
+    "--pr",
+    "1",
+    "--target-project",
+    "devel:openQA:GitHub",
+    "--source-project",
+    "devel:openQA",
+    "--source-package",
+    "openQA",
+]
+
+
+def test_find_workflow_file_returns_none_when_no_workflow_exists(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+
+    assert sut.find_workflow_file(tmp_path) is None
+
+
+def test_detect_github_repo_falls_back_to_the_remote_list() -> None:
+    def runner(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        if cmd[1:3] == ["remote", "get-url"]:
+            return make_completed_process(stdout="ssh://git@gitlab.example.org/x/y.git")
+        return make_completed_process(stdout="upstream\tgit@github.com:os-autoinst/openQA.git (fetch)")
+
+    assert sut.detect_github_repo(runner=runner) == ("os-autoinst", "openQA")
+
+
+def test_fetch_project_meta_with_unparsable_xml_is_none() -> None:
+    runner = MagicMock(return_value=make_completed_process(stdout="not xml"))
+
+    assert sut.fetch_project_meta("test", runner=runner) is None
+
+
+@pytest.mark.parametrize(
+    ("desc", "xml_content", "expected"),
+    [
+        (
+            "a status without code is ignored",
+            '<resultlist><result><status/></result><result><status code="excluded"/></result></resultlist>',
+            True,
+        ),
+        (
+            "a result without status or code is ignored",
+            '<resultlist><result/><result><status code="excluded"/></result></resultlist>',
+            True,
+        ),
+        ("a result carrying its own code is counted", '<resultlist><result state="disabled"/></resultlist>', True),
+    ],
+)
+def test_check_all_results_ignores_results_without_codes(desc: str, xml_content: str, expected: bool) -> None:
+    runner = MagicMock(return_value=make_completed_process(stdout=xml_content))
+
+    assert sut.check_all_results_excluded_or_disabled("test-proj", runner=runner) is expected, desc
+
+
+def test_repair_after_cycle_fails_when_the_meta_cannot_be_updated() -> None:
+    def runner(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        if cmd[1:3] == ["meta", "prj"]:
+            return make_completed_process(stdout='<project name="p"/>')
+        if cmd[1] == "ls" and len(cmd) == 3:
+            return make_completed_process(stdout="openQA\n")
+        if cmd[1] == "ls":
+            return make_completed_process(stdout="_service\n")
+        if cmd[1] == "api":
+            return make_completed_process(returncode=1, stderr="denied")
+        if cmd[1] == "results" and "--xml" in cmd:
+            return make_completed_process(stdout=HEALTHY_RESULTS_XML)
+        return make_completed_process(stdout="openQA  x  TW x86_64\n")
+
+    assert sut.repair_after_cycle(openqa_context(), runner=runner, sleep=lambda _s: None) is False
+
+
+def test_recreate_project_accepts_a_typed_confirmation() -> None:
+    ctx = sut.ProjectContext(
+        owner="os-autoinst",
+        repo="openQA",
+        pr_number=1,
+        workflow=sut.WorkflowConfig("", "", ""),
+        obs_project="proj",
+    )
+    runner = MagicMock(return_value=make_completed_process())
+
+    with patch("builtins.input", return_value="YES"), patch.object(sut, "repair_after_cycle", return_value=True):
+        assert sut.recreate_project(ctx, auto_confirm=False, runner=runner) is True
+
+    assert runner.call_count == 3
+
+
+def test_recreate_project_warns_when_the_project_cannot_be_deleted(capsys) -> None:
+    ctx = sut.ProjectContext(
+        owner="os-autoinst",
+        repo="openQA",
+        pr_number=1,
+        workflow=sut.WorkflowConfig("", "", ""),
+        obs_project="proj",
+    )
+
+    def runner(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        if cmd[1] == "rdelete":
+            return make_completed_process(returncode=1, stderr="Server returned an error: 403")
+        return make_completed_process()
+
+    with patch.object(sut, "repair_after_cycle", return_value=True):
+        assert sut.recreate_project(ctx, auto_confirm=True, runner=runner) is True
+
+    assert "Warning deleting project: Server returned an error: 403" in capsys.readouterr().err
+
+
+def test_main_rejects_two_actions_with_a_resolved_context(capsys) -> None:
+    assert sut.main([*BASE_ARGS, "--recreate", "--rebuild", "--skip-auth-check"]) == 1
+
+    assert "Only one of --recreate, --configure-repos, --repair-branch, or --rebuild" in capsys.readouterr().err
+
+
+def test_main_runs_the_auth_check_unless_skipped(mocker) -> None:
+    verify = mocker.patch.object(sut, "verify_prerequisites")
+    mocker.patch.object(sut, "diagnose", return_value=sut.DiagnosticReport(project_exists=False))
+    mocker.patch.object(sut, "format_report", return_value="report")
+
+    assert sut.main(BASE_ARGS) == 2
+    verify.assert_called_once_with()
+
+
+def test_find_workflow_file_walks_up_without_a_git_root(tmp_path: Path) -> None:
+    deep = tmp_path / "a" / "b"
+    deep.mkdir(parents=True)
+
+    assert sut.find_workflow_file(deep) is None
+
+
+def test_detect_github_repo_skips_lines_that_are_not_github_remotes() -> None:
+    def runner(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        if cmd[1:3] == ["remote", "get-url"]:
+            return make_completed_process(returncode=1)
+        if cmd[1:3] == ["remote", "-v"]:
+            return make_completed_process(stdout="short\nupstream\tfile:///tmp/x (fetch)\n")
+        return make_completed_process(returncode=1)
+
+    with pytest.raises(ValueError, match="Could not detect GitHub repository"):
+        sut.detect_github_repo(runner=runner)
