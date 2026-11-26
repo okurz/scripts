@@ -68,6 +68,9 @@ def main() -> int:
     """Print every tracked Python file below 100% and exit non-zero when there is one."""
     cov = coverage.Coverage(config_file=True)
     cov.load()
+    if not cov.get_data().measured_files():
+        print("no coverage data: run make test-unit first", file=sys.stderr)
+        return 2
     paths = tracked_python_files()
     found = report(cov, paths)
     if not found:

@@ -98,3 +98,13 @@ def test_the_makefile_runs_the_scope_check_after_the_tests():
 
     assert "check-coverage-scope:" in makefile
     assert "$(MAKE) check-coverage-scope" in makefile
+
+
+def test_main_without_coverage_data_explains_what_to_run(mocker, capsys):
+    cov = mocker.patch.object(coverage_scope.coverage, "Coverage")
+    cov.return_value.get_data.return_value.measured_files.return_value = set()
+    report = mocker.patch.object(coverage_scope, "report")
+
+    assert coverage_scope.main() == 2
+    assert "no coverage data: run make test-unit first" in capsys.readouterr().err
+    report.assert_not_called()
