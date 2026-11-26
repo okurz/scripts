@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """Review many pull requests as the review bot, one isolated session per PR.
 
-Resolves a scope (an org or a list of repositories) with ``gh search prs``, drops drafts,
-bot-authored PRs and PRs the bot already reviewed on the current head, then ranks the rest:
-PRs the bot currently blocks, then unreviewed PRs with at most one human reviewer, then
-everything else. The search window holds the most recently updated open PRs, so a push to an
-old PR re-enters it; ``--sort created`` (implied by ``--oldest``) sweeps creation order instead.
-``--only-blocked`` narrows the batch to the blocked PRs alone. One review
-session runs serially in the matching local checkout; a blocked PR gets a comment instead of
-a second block. A session that finds nothing new posts no review and ends with ``--- REVIEW
+Reads every open PR of the scope with one GraphQL census (100 PRs per call), keeps the ones the
+bot owes a review, and ranks them by the age of that obligation: C1 a head the bot's last decisive
+review does not cover, C2 activity after a verdict on the current head, C3 never reviewed and
+fresh, C4 never reviewed and stale, C5 nothing owed but asked for with ``--recheck``. A cycle
+fills its slots by class with reserved slots for C3/C4 so no class starves, and appends the wait
+per PR to ``<cache>/waits.csv``. Drafts, bot-authored PRs and heads the bot already covered are
+dropped; ``--only-blocked`` narrows the batch to the PRs the bot still blocks. One review
+session runs serially in the matching local checkout; a PR the bot still blocks on this head gets
+a comment instead of a second block, while a new head gets a full verdict so the bot can lift its
+own block. A session that finds nothing new posts no review and ends with ``--- REVIEW
 SKIPPED``; its head is recorded in ``<cache>/skipped.json`` so a later cycle does not ask again.
 The runner defaults to ``pi -p "/review-as-bot <url> --post"``; ``--runner opencode`` uses
 ``opencode run --command review-as-bot`` instead. Posting is the default; ``--dry-run``
 prints each draft instead and leaves ``REVIEW_BOT_POST`` unset so the as-bot wrappers refuse
 writes. ``--watch --interval N`` repeats the cycle and gives each cycle
-its own log directory. A failing PR is reported and the batch continues.
+its own log directory; ``--shard i/n`` restricts a batch to one residue class of PR numbers so
+parallel batches cannot pick the same PR. A failing PR is reported and the batch continues.
 """
 
 from __future__ import annotations
@@ -27,11 +30,9 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
+from typing import Any
 
 BOT_FALLBACK = "os-autoinst-review"
 DEFAULT_ROOTS = (Path.home() / "local" / "os-autoinst",)
@@ -39,15 +40,27 @@ DEFAULT_CACHE = Path.home() / ".cache" / "review-bot"
 DEFAULT_LIMIT = 10
 DEFAULT_TIMEOUT = 1200.0
 DEFAULT_INTERVAL = 1200.0
-MAX_SEARCH_LIMIT = 1000
-SEARCH_SORTS = ("created", "updated")
-DEFAULT_SORT = "updated"
-SEARCH_FIELDS = "number,title,isDraft,author,createdAt,repository"
 REVIEW_STATES = frozenset({"APPROVED", "CHANGES_REQUESTED", "COMMENTED"})
 REVIEW_ENTRY_FIELDS = 3
 JQ_REVIEWS = '.[] | "\\(.user.login)\\t\\(.state)\\t\\(.commit_id)"'
 SKIP_MARKER = "--- REVIEW SKIPPED"
-SKIP_CACHE = DEFAULT_CACHE / "skipped.json"
+SKIP_LEDGER = "skipped.json"
+WAITS_FILE = "waits.csv"
+FRESH_DAYS = 14
+CLASS_ORDER = ("C1", "C2", "C3", "C4", "C5")
+CLASS_RESERVES = {"C3": 1, "C4": 2}
+CENSUS_QUERY = """query($q: String!, $cursor: String) {
+  search(query: $q, type: ISSUE, first: 100, after: $cursor) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ... on PullRequest {
+      number title isDraft createdAt updatedAt headRefOid
+      repository { nameWithOwner }
+      author { login }
+      commits(last: 1) { nodes { commit { committedDate } } }
+      reviews(last: 100) { nodes { author { login } state submittedAt commit { oid } } }
+    } }
+  }
+}"""
 
 
 @dataclass(frozen=True)
@@ -78,10 +91,57 @@ class PrState:
 
     head: str
     reviewed_on_head: bool = False
-    has_bot_review: bool = False
     has_bot_block: bool = False
     blocked_on_head: bool = False
+
+
+@dataclass(frozen=True)
+class BotReview:
+    """One review the bot submitted, as the census reports it."""
+
+    state: str
+    commit: str
+    submitted_at: str
+
+
+@dataclass(frozen=True)
+class PrFacts:
+    """Everything the census knows about one open PR, enough to rank it without another call."""
+
+    repo: str
+    number: int
+    title: str
+    author: str
+    created_at: str
+    updated_at: str
+    head: str
+    head_at: str
+    is_draft: bool = False
+    bot_reviews: tuple[BotReview, ...] = ()
     human_reviewers: int = 0
+
+    @property
+    def candidate(self) -> Candidate:
+        """The review candidate this PR represents."""
+        return Candidate(
+            repo=self.repo,
+            number=self.number,
+            title=self.title,
+            author=self.author,
+            created_at=self.created_at,
+            is_draft=self.is_draft,
+        )
+
+    @property
+    def state(self) -> PrState:
+        """Derive the review state from the bot reviews the census returned."""
+        bot = [(review.state, review.commit) for review in self.bot_reviews]
+        return PrState(
+            head=self.head,
+            reviewed_on_head=any(commit == self.head for _state, commit in bot),
+            has_bot_block=still_blocked(bot),
+            blocked_on_head=blocked_on_head(bot, self.head),
+        )
 
 
 @dataclass(frozen=True)
@@ -104,15 +164,6 @@ def blocked_on_head(bot: list[tuple[str, str]], head: str) -> bool:
     return still_blocked(bot) and next((commit for state, commit in reversed(bot) if state != "COMMENTED"), "") == head
 
 
-def review_priority(state: PrState) -> int:
-    """Rank eligible PRs: existing block, then unreviewed with little human review, then rest."""
-    if state.has_bot_block:
-        return 0
-    if not state.has_bot_review and state.human_reviewers <= 1:
-        return 1
-    return 2
-
-
 def run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     """Run a command and capture its output without raising on failure."""
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
@@ -130,71 +181,122 @@ def parse_github_repo(url: str) -> str | None:
     return match.group(1) if match else None
 
 
-def search_window(limit: int, window: int = 0) -> int:
-    """Return how many search results to fetch for a batch of the given size."""
-    return min(max(window or max(limit * 10, 50), limit), MAX_SEARCH_LIMIT)
+def census_scopes(owners: list[str], repos: list[str]) -> list[str]:
+    """Return one GraphQL search per owner and per repository."""
+    scopes = [f"user:{owner} is:pr is:open archived:false" for owner in owners]
+    return [*scopes, *(f"repo:{repo} is:pr is:open archived:false" for repo in repos)]
 
 
-def search_sort(sort: str, *, oldest: bool) -> str:
-    """Return the sort key; a backlog sweep keeps creation order unless the caller chose one."""
-    return sort or ("created" if oldest else DEFAULT_SORT)
-
-
-def search_scope(scope: list[str], limit: int, *, oldest: bool, window: int, sort: str = "") -> list[Candidate]:
-    """Enumerate open PRs for one gh search scope (owner or repository filters)."""
-    cmd = [
-        "gh-as-bot",
-        "search",
-        "prs",
-        "--state",
-        "open",
-        "--limit",
-        str(search_window(limit, window)),
-        "--sort",
-        search_sort(sort, oldest=oldest),
-        "--order",
-        "asc" if oldest else "desc",
-        "--json",
-        SEARCH_FIELDS,
-        *scope,
+def facts_from_node(node: dict[str, Any], login: str) -> PrFacts:
+    """Build the facts of one census node, keeping only the reviews of ``login`` as the bot's own."""
+    reviews = [
+        review for review in (node.get("reviews") or {}).get("nodes") or [] if review.get("state") in REVIEW_STATES
     ]
-    res = run(cmd)
-    if res.returncode != 0:
-        msg = f"gh search prs failed: {res.stderr.strip()}"
-        raise RuntimeError(msg)
-    return [candidate_from_json(item) for item in json.loads(res.stdout or "[]")]
-
-
-def search_candidates(
-    owners: list[str], repos: list[str], limit: int, *, oldest: bool = False, window: int = 0, sort: str = ""
-) -> list[Candidate]:
-    """Enumerate open PRs for the union of owners and explicit repositories."""
-    found: dict[tuple[str, int], Candidate] = {}
-    for owner in owners:
-        for cand in search_scope(["--owner", owner], limit=limit, oldest=oldest, window=window, sort=sort):
-            found[cand.repo, cand.number] = cand
-    if repos:
-        scope = [arg for repo in repos for arg in ("-R", repo)]
-        for cand in search_scope(scope, limit=limit, oldest=oldest, window=window, sort=sort):
-            found[cand.repo, cand.number] = cand
-    return list(found.values())
-
-
-def candidate_from_json(item: dict[str, Any]) -> Candidate:
-    """Build a Candidate from one ``gh search prs --json`` record."""
-    author = item.get("author") or {}
-    return Candidate(
-        repo=item["repository"]["nameWithOwner"],
-        number=int(item["number"]),
-        title=item.get("title", ""),
-        author=author.get("login", ""),
-        created_at=item.get("createdAt", ""),
-        is_draft=bool(item.get("isDraft")),
+    logins = [(review.get("author") or {}).get("login", "") for review in reviews]
+    author = (node.get("author") or {}).get("login", "")
+    head = ((node.get("commits") or {}).get("nodes") or [{}])[0].get("commit") or {}
+    return PrFacts(
+        repo=node["repository"]["nameWithOwner"],
+        number=int(node["number"]),
+        title=node.get("title", ""),
+        author=author,
+        created_at=node.get("createdAt", ""),
+        updated_at=node.get("updatedAt", ""),
+        head=node.get("headRefOid", ""),
+        head_at=head.get("committedDate", ""),
+        is_draft=bool(node.get("isDraft")),
+        bot_reviews=tuple(
+            BotReview(
+                state=review["state"],
+                commit=(review.get("commit") or {}).get("oid", ""),
+                submitted_at=review.get("submittedAt", ""),
+            )
+            for review, who in zip(reviews, logins, strict=True)
+            if who == login
+        ),
+        human_reviewers=len({who for who in logins if who not in {login, author} and not who.endswith("[bot]")}),
     )
 
 
+def fetch_census(owners: list[str], repos: list[str], login: str) -> list[PrFacts]:
+    """Read every open PR of the scopes, one GraphQL search page of 100 PRs per call."""
+    found: dict[tuple[str, int], PrFacts] = {}
+    for search in census_scopes(owners, repos):
+        cursor = ""
+        while True:
+            res = run([
+                "gh-as-bot",
+                "api",
+                "graphql",
+                "-f",
+                f"query={CENSUS_QUERY}",
+                "-f",
+                f"q={search}",
+                "-f",
+                f"cursor={cursor}",
+            ])
+            if res.returncode != 0:
+                msg = f"census failed for {search}: {res.stderr.strip()}"
+                raise RuntimeError(msg)
+            page = json.loads(res.stdout or "{}")["data"]["search"]
+            for node in page["nodes"]:
+                if node:
+                    facts = facts_from_node(node, login)
+                    found[facts.repo, facts.number] = facts
+            if not page["pageInfo"]["hasNextPage"]:
+                break
+            cursor = page["pageInfo"]["endCursor"]
+    return list(found.values())
+
+
+def parse_stamp(value: str) -> datetime:
+    """Parse one API timestamp."""
+    return datetime.fromisoformat(value.strip())
+
+
+def stamp_now() -> str:
+    """Return the current UTC time in the form the API uses."""
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def stamp_days_ago(days: int) -> str:
+    """Return the UTC stamp ``days`` before now."""
+    return (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def wait_seconds(owed_since: str, *, now: str = "") -> float:
+    """Return how long the bot has owed this PR, in seconds."""
+    return (parse_stamp(now or stamp_now()) - parse_stamp(owed_since)).total_seconds()
+
+
+def format_wait(seconds: float) -> str:
+    """Render a wait as days, hours or minutes, whichever is the largest whole unit."""
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{seconds / size:.0f}{unit}"
+    return f"{seconds:.0f}s"
+
+
+def obligation(facts: PrFacts, *, cutoff: str) -> tuple[str, str] | None:
+    """Return the urgency class of a PR and the moment the bot came to owe it, None when nothing is owed.
+
+    C1 is a head the bot's last decisive verdict does not cover, C2 activity after a verdict on this
+    head, C3/C4 a PR the bot never reviewed at all, fresh or stale.
+    """
+    decisive = [review for review in facts.bot_reviews if review.state != "COMMENTED"]
+    if decisive and decisive[-1].commit != facts.head:
+        return "C1", facts.head_at
+    if facts.state.reviewed_on_head and facts.bot_reviews and facts.updated_at > facts.bot_reviews[-1].submitted_at:
+        return "C2", facts.bot_reviews[-1].submitted_at
+    if facts.bot_reviews and not facts.state.reviewed_on_head:
+        return "C1", facts.head_at
+    if facts.bot_reviews:
+        return None
+    return ("C3" if facts.created_at >= cutoff else "C4"), facts.created_at
+
+
 def pr_state(cand: Candidate, login: str) -> PrState:
-    """Read the head sha, the bot's reviews, and the human reviewer count."""
+    """Read the head sha and the bot's reviews of one PR."""
     view = run([
         "gh-as-bot",
         "pr",
@@ -225,16 +327,11 @@ def pr_state(cand: Candidate, login: str) -> PrState:
     entries = [line.split("\t") for line in reviews.stdout.splitlines()]
     entries = [entry for entry in entries if len(entry) == REVIEW_ENTRY_FIELDS and entry[1] in REVIEW_STATES]
     bot = [(state, commit) for user, state, commit in entries if user == login]
-    humans = {
-        user for user, _state, _commit in entries if user not in {login, cand.author} and not user.endswith("[bot]")
-    }
     return PrState(
         head=head,
         reviewed_on_head=any(commit == head for _state, commit in bot),
-        has_bot_review=bool(bot),
         has_bot_block=still_blocked(bot),
         blocked_on_head=blocked_on_head(bot, head),
-        human_reviewers=len(humans),
     )
 
 
@@ -266,53 +363,113 @@ def record_skip(path: Path, cand: Candidate, state: PrState, skips: dict[str, st
     save_skips(path, skips)
 
 
-def filter_candidates(
-    candidates: list[Candidate],
+def record_wait(path: Path, cand: Candidate, owed: tuple[str, str], *, now: str = "") -> float:
+    """Append one reviewed PR to the latency ledger and return how long it waited."""
+    seconds = wait_seconds(owed[1], now=now)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(f"{now or stamp_now()},{cand.repo},{cand.number},{owed[0]},{owed[1]},{seconds:.0f}\n")
+    return seconds
+
+
+def parse_shard(value: str) -> tuple[int, int]:
+    """Parse ``i/n`` into a one-based shard index and its count."""
+    match = re.fullmatch(r"(\d+)/(\d+)", value.strip())
+    if not match or not 1 <= int(match.group(1)) <= int(match.group(2)):
+        msg = f"expected i/n with 1 <= i <= n, got {value!r}"
+        raise argparse.ArgumentTypeError(msg)
+    return int(match.group(1)), int(match.group(2))
+
+
+def cache_dir(args: argparse.Namespace) -> Path:
+    """Return the cache directory holding the skip ledger and the latency ledger."""
+    return Path(args.cache).expanduser() if args.cache else DEFAULT_CACHE
+
+
+def owed_work(
+    found: list[PrFacts],
     login: str,
     *,
-    skip_reviewed: bool,
+    skips: dict[str, str],
+    cutoff: str,
     include_bots: bool = False,
     only_blocked: bool = False,
-    skips: dict[str, str] | None = None,
-    state_lookup: Callable[[Candidate, str], PrState] | None = None,
-) -> tuple[list[Candidate], dict[tuple[str, int], PrState]]:
-    """Drop drafts, bot-authored PRs, unblocked PRs and (optionally) heads already handled."""
-    skips = skips or {}
-    if state_lookup is None:
-        state_lookup = pr_state
-    kept: list[Candidate] = []
-    states: dict[tuple[str, int], PrState] = {}
-    for cand in candidates:
-        if cand.is_draft or cand.author == login:
+    recheck: bool = False,
+    shard: tuple[int, int] | None = None,
+) -> tuple[list[Candidate], dict[tuple[str, int], tuple[str, str]]]:
+    """Return the PRs that owe the bot work and, per PR, the urgency class and the owed-since stamp."""
+    owed: dict[tuple[str, int], tuple[str, str]] = {}
+    for facts in found:
+        if facts.is_draft or facts.author == login or (not include_bots and facts.author.endswith("[bot]")):
             continue
-        if not include_bots and cand.author.endswith("[bot]"):
+        if shard and facts.number % shard[1] != shard[0] % shard[1]:
             continue
-        try:
-            state = state_lookup(cand, login)
-        except RuntimeError as err:
-            print(f"skip {cand.repo}#{cand.number}: {err}", file=sys.stderr)
-            continue
-        states[cand.repo, cand.number] = state
+        state = facts.state
         if only_blocked and not state.has_bot_block:
             continue
-        if skip_reviewed and (state.reviewed_on_head or skips.get(skip_key(cand.repo, cand.number)) == state.head):
+        if not recheck and skips.get(skip_key(facts.repo, facts.number)) == state.head:
             continue
-        kept.append(cand)
-    return kept, states
+        due = obligation(facts, cutoff=cutoff) or (("C5", facts.updated_at) if recheck else None)
+        if due:
+            owed[facts.repo, facts.number] = due
+    return [facts.candidate for facts in found if (facts.repo, facts.number) in owed], owed
 
 
-def select_candidates(
+def group_by_class(
+    candidates: list[Candidate], owed: dict[tuple[str, int], tuple[str, str]]
+) -> dict[str, list[Candidate]]:
+    """Bucket the candidates by urgency class, oldest obligation first inside a class."""
+    by_class: dict[str, list[Candidate]] = {}
+    for cand in candidates:
+        by_class.setdefault(owed[cand.repo, cand.number][0], []).append(cand)
+    for bucket in by_class.values():
+        bucket.sort(key=lambda cand: owed[cand.repo, cand.number][1])
+    return by_class
+
+
+def take_class(
+    by_class: dict[str, list[Candidate]],
+    offsets: dict[str, int],
+    chosen: list[Candidate],
+    *,
+    class_name: str,
+    count: int,
+    limit: int,
+) -> None:
+    """Append up to ``count`` more PRs of one class, never exceeding ``limit`` in total."""
+    bucket = by_class.get(class_name, [])
+    start = offsets.get(class_name, 0)
+    end = min(len(bucket), start + max(0, count), start + max(0, limit - len(chosen)))
+    chosen.extend(bucket[start:end])
+    offsets[class_name] = end
+
+
+def select_owed(
     candidates: list[Candidate],
+    owed: dict[tuple[str, int], tuple[str, str]],
     limit: int,
     *,
-    oldest: bool = False,
-    states: dict[tuple[str, int], PrState] | None = None,
+    reserves: dict[str, int] | None = None,
 ) -> list[Candidate]:
-    """Take the highest-priority PRs, newest (or oldest) first within a priority bucket."""
-    ordered = sorted(candidates, key=lambda cand: cand.created_at, reverse=not oldest)
-    if states:
-        ordered.sort(key=lambda cand: review_priority(states[cand.repo, cand.number]))
-    return ordered[:limit]
+    """Fill a cycle by class order with slots held back for the backlog, so no class starves.
+
+    C1/C2 are filled first, but only up to ``limit`` minus half of the held slots, so a flood of
+    freshly invalidated reviews cannot push the C3/C4 reserves out of the cycle.
+    """
+    reserves = CLASS_RESERVES if reserves is None else reserves
+    by_class = group_by_class(candidates, owed)
+    held = sum(min(count, limit) for count in reserves.values())
+    chosen: list[Candidate] = []
+    offsets: dict[str, int] = {}
+    urgent = max(0, limit - min(held, limit // 2))
+    for class_name in ("C1", "C2"):
+        take_class(by_class, offsets, chosen, class_name=class_name, count=max(0, urgent - len(chosen)), limit=limit)
+    for class_name, count in reserves.items():
+        take_class(by_class, offsets, chosen, class_name=class_name, count=count, limit=limit)
+    for class_name in CLASS_ORDER:
+        take_class(by_class, offsets, chosen, class_name=class_name, count=limit, limit=limit)
+    chosen.sort(key=lambda cand: (CLASS_ORDER.index(owed[cand.repo, cand.number][0]), owed[cand.repo, cand.number][1]))
+    return chosen
 
 
 def discover_checkouts(roots: list[Path] | tuple[Path, ...]) -> dict[str, Path]:
@@ -489,16 +646,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--limit", type=int, default=DEFAULT_LIMIT, help=f"max PRs to review (default: {DEFAULT_LIMIT})"
     )
     parser.add_argument("--list", action="store_true", help="print the selected PRs and exit without reviewing")
-    parser.add_argument("--oldest", action="store_true", help="sweep the oldest open PRs instead of the newest")
-    parser.add_argument(
-        "--sort",
-        choices=SEARCH_SORTS,
-        default="",
-        help=f"search window order, 'asc' or 'desc' follows --oldest (default: {DEFAULT_SORT})",
-    )
-    parser.add_argument(
-        "--window", type=int, default=0, help="open PRs to search before filtering (default: 10x limit, min 50)"
-    )
     parser.add_argument(
         "--timeout",
         type=float,
@@ -526,6 +673,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--include-bots", action="store_true", help="include PRs authored by dependency bots")
     parser.add_argument("--no-clone", action="store_true", help="skip repos with no local checkout instead of cloning")
     parser.add_argument("--root", action="append", default=[], dest="roots", help="checkout root, repeatable")
+    parser.add_argument(
+        "--cache", default="", help=f"cache directory holding the skip and latency ledgers (default: {DEFAULT_CACHE})"
+    )
+    parser.add_argument(
+        "--shard",
+        type=parse_shard,
+        default=None,
+        help="review only PRs where number %% N == I %% N of this i/n shard, for overlap-free parallel batches",
+    )
     parser.add_argument("--log-dir", default="", help="directory for per-PR logs (default: ~/.cache/review-bot/logs)")
     parser.add_argument(
         "--runner",
@@ -549,16 +705,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def review_candidate(
     cand: Candidate,
     state: PrState,
+    owed: tuple[str, str],
     *,
     args: argparse.Namespace,
     checkouts: dict[str, Path],
     log_dir: Path,
     login: str,
     skips: dict[str, str],
-    skip_cache: Path,
+    cache: Path,
 ) -> bool:
     """Review one candidate and return whether its head now needs no further review."""
-    print(f"reviewing {cand.repo}#{cand.number}: {cand.title[:60]}", file=sys.stderr)
+    label = f"{owed[0]} {format_wait(wait_seconds(owed[1]))}"
+    print(f"reviewing {cand.repo}#{cand.number} ({label}): {cand.title[:60]}", file=sys.stderr)
     try:
         checkout = ensure_checkout(cand.repo, checkouts, DEFAULT_CACHE, allow_clone=not args.no_clone)
         outcome = run_review(
@@ -577,70 +735,85 @@ def review_candidate(
         print(f"FAILED  {cand.repo}#{cand.number}: {err}", file=sys.stderr)
         return False
     if outcome.skipped:
-        record_skip(skip_cache, cand, state, skips)
+        record_skip(cache / SKIP_LEDGER, cand, state, skips)
+    if not args.dry_run:
+        record_wait(cache / WAITS_FILE, cand, owed)
     ok = confirm_posted(cand, login, outcome, dry_run=args.dry_run)
     status = "skip" if outcome.skipped else ("ok" if ok else "FAILED")
-    print(f"{status}  {cand.repo}#{cand.number}  log={outcome.log}", file=sys.stderr)
+    print(f"{status}  {cand.repo}#{cand.number}  {label}  log={outcome.log}", file=sys.stderr)
     return ok
 
 
-def run_cycle(args: argparse.Namespace) -> int:
-    """Run one search, filter, select and review cycle and return a shell exit code."""
-    owners = [owner for owner in (args.owner or ([infer_owner()] if not args.repos else [])) if owner]
-    if not owners and not args.repos:
-        print("error: give --owner or -R owner/repo (or run inside a checkout)", file=sys.stderr)
-        return 2
-    login = bot_login()
-    window = search_window(args.limit, args.window)
-    try:
-        found = search_candidates(owners, args.repos, args.limit, oldest=args.oldest, window=window, sort=args.sort)
-    except (RuntimeError, OSError, ValueError) as err:
-        print(f"search failed: {err}", file=sys.stderr)
-        return 1
-    skips = load_skips(SKIP_CACHE)
-    kept, states = filter_candidates(
-        found,
-        login,
-        skip_reviewed=not args.recheck,
-        include_bots=args.include_bots,
-        only_blocked=args.only_blocked,
-        skips=skips,
-    )
-    candidates = select_candidates(kept, args.limit, oldest=args.oldest, states=states)
-    if not candidates:
-        end = "oldest" if args.oldest else "newest"
-        print(
-            f"no reviewable PRs among the {end} {window} open PRs by "
-            f"{search_sort(args.sort, oldest=args.oldest)} for {', '.join(args.repos or owners)}",
-            file=sys.stderr,
-        )
-        if not args.oldest:
-            print("use --oldest to sweep the backlog or raise --window to look deeper", file=sys.stderr)
-        return 0
-    if args.list:
-        for cand in candidates:
-            print(f"{cand.repo}#{cand.number}\t{cand.created_at[:10]}\t{cand.author}\t{cand.title}")
-        return 0
-    mode = "dry-run" if args.dry_run else "post"
-    print(f"{len(candidates)} PR(s), mode={mode}, reviewer={login}", file=sys.stderr)
+def review_selected(
+    selected: list[Candidate],
+    owed: dict[tuple[str, int], tuple[str, str]],
+    found: list[PrFacts],
+    *,
+    args: argparse.Namespace,
+    login: str,
+    skips: dict[str, str],
+    cache: Path,
+) -> int:
+    """Review the selected PRs serially and return the number of failures."""
     roots = [Path(root).expanduser() for root in args.roots] or list(DEFAULT_ROOTS)
     checkouts = discover_checkouts(roots)
-    log_dir = Path(args.log_dir).expanduser() if args.log_dir else DEFAULT_CACHE / "logs"
+    log_dir = Path(args.log_dir).expanduser() if args.log_dir else cache / "logs"
+    states = {(facts.repo, facts.number): facts.state for facts in found}
     failures = 0
-    for cand in candidates:
-        state = states[cand.repo, cand.number]
+    for cand in selected:
         if not review_candidate(
             cand,
-            state,
+            states[cand.repo, cand.number],
+            owed[cand.repo, cand.number],
             args=args,
             checkouts=checkouts,
             log_dir=log_dir,
             login=login,
             skips=skips,
-            skip_cache=SKIP_CACHE,
+            cache=cache,
         ):
             failures += 1
-    print(f"done: {len(candidates) - failures} ok, {failures} failed", file=sys.stderr)
+    return failures
+
+
+def run_cycle(args: argparse.Namespace) -> int:
+    """Run one census, classify, select and review cycle and return a shell exit code."""
+    owners = [owner for owner in (args.owner or ([infer_owner()] if not args.repos else [])) if owner]
+    if not owners and not args.repos:
+        print("error: give --owner or -R owner/repo (or run inside a checkout)", file=sys.stderr)
+        return 2
+    login = bot_login()
+    cache = cache_dir(args)
+    try:
+        found = fetch_census(owners, args.repos, login)
+    except (RuntimeError, OSError, ValueError, KeyError) as err:
+        print(f"census failed: {err}", file=sys.stderr)
+        return 1
+    skips = load_skips(cache / SKIP_LEDGER)
+    candidates, owed = owed_work(
+        found,
+        login,
+        skips=skips,
+        cutoff=stamp_days_ago(FRESH_DAYS),
+        include_bots=args.include_bots,
+        only_blocked=args.only_blocked,
+        recheck=args.recheck,
+        shard=args.shard,
+    )
+    print(f"census: {len(found)} open PRs, {len(owed)} owed, {len(candidates)} eligible", file=sys.stderr)
+    selected = select_owed(candidates, owed, args.limit)
+    if not selected:
+        print(f"nothing owed for {', '.join(args.repos or owners)}", file=sys.stderr)
+        return 0
+    if args.list:
+        for cand in selected:
+            cls, since = owed[cand.repo, cand.number]
+            print(f"{cand.repo}#{cand.number}\t{cls}\t{since[:10]}\t{cand.author}\t{cand.title}")
+        return 0
+    mode = "dry-run" if args.dry_run else "post"
+    print(f"{len(selected)} PR(s), mode={mode}, reviewer={login}", file=sys.stderr)
+    failures = review_selected(selected, owed, found, args=args, login=login, skips=skips, cache=cache)
+    print(f"done: {len(selected) - failures} ok, {failures} failed", file=sys.stderr)
     return 1 if failures else 0
 
 

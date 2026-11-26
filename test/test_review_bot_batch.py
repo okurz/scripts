@@ -1,5 +1,7 @@
 """Tests for review-bot-batch: scope parsing, selection, checkout mapping and dispatch."""
 
+import argparse
+import json
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -44,84 +46,158 @@ def test_candidate_url_and_slug(sut):
     assert cand.slug == "os-autoinst-openQA-8141"
 
 
-def test_search_candidates_uses_owner_scope(sut, mocker):
-    run = mocker.patch.object(sut, "run")
-    run.return_value = MagicMock(
-        returncode=0,
-        stderr="",
-        stdout='[{"number": 1, "title": "t", "isDraft": false, "author": {"login": "okurz"}, '
-        '"createdAt": "2026-01-01T00:00:00Z", "repository": {"nameWithOwner": "os-autoinst/openQA"}}]',
-    )
-    got = sut.search_candidates(["os-autoinst"], [], 2)
-    cmd = run.call_args.args[0]
-    assert cmd[:2] == ["gh-as-bot", "search"]
-    assert "--owner" in cmd
-    assert cmd[cmd.index("--owner") + 1] == "os-autoinst"
-    assert cmd[cmd.index("--sort") + 1] == "updated"
-    assert cmd[cmd.index("--order") + 1] == "desc"
-    assert "os-autoinst/openQA" not in cmd
-    assert got[0].repo == "os-autoinst/openQA"
-    assert got[0].is_draft is False
-
-
-def test_search_window_defaults_and_override(sut):
-    assert sut.search_window(10) == 100
-    assert sut.search_window(1) == 50
-    assert sut.search_window(10, 20) == 20
-    assert sut.search_window(10, 5000) == sut.MAX_SEARCH_LIMIT
-
-
-def test_search_candidates_oldest_scope(sut, mocker):
-    run = mocker.patch.object(sut, "run")
-    run.return_value = MagicMock(returncode=0, stderr="", stdout="[]")
-    sut.search_candidates(["os-autoinst"], [], 1, oldest=True)
-    cmd = run.call_args.args[0]
-    assert cmd[cmd.index("--sort") + 1] == "created"
-    assert cmd[cmd.index("--order") + 1] == "asc"
-
-
-@pytest.mark.parametrize(("sort", "expected"), [("created", "created"), ("updated", "updated")])
-def test_search_candidates_honours_an_explicit_sort(sut, mocker, sort, expected):
-    run = mocker.patch.object(sut, "run")
-    run.return_value = MagicMock(returncode=0, stderr="", stdout="[]")
-    sut.search_candidates(["os-autoinst"], [], 1, oldest=True, sort=sort)
-    assert run.call_args.args[0][run.call_args.args[0].index("--sort") + 1] == expected
-
-
-def test_search_sort_defaults_to_recent_activity(sut):
-    assert sut.search_sort("", oldest=False) == "updated"
-    assert sut.search_sort("", oldest=True) == "created"
-    assert sut.search_sort("updated", oldest=True) == "updated"
-
-
-def test_search_candidates_uses_repo_scope(sut, mocker):
-    run = mocker.patch.object(sut, "run")
-    run.return_value = MagicMock(returncode=0, stderr="", stdout="[]")
-    sut.search_candidates([], ["os-autoinst/openQA", "os-autoinst/os-autoinst"], 1)
-    cmd = run.call_args.args[0]
-    assert cmd.count("-R") == 2
-    assert "--owner" not in cmd
-
-
-def test_search_candidates_unions_owners_and_repos(sut, mocker):
-    run = mocker.patch.object(sut, "run")
-    owner_item = '{"number": 1, "title": "t", "isDraft": false, "author": {"login": "a"}, "createdAt": "2026-01-01", "repository": {"nameWithOwner": "os-autoinst/openQA"}}'
-    repo_item = '{"number": 2, "title": "t", "isDraft": false, "author": {"login": "b"}, "createdAt": "2026-01-02", "repository": {"nameWithOwner": "openSUSE/qem-bot"}}'
-    run.side_effect = [
-        MagicMock(returncode=0, stderr="", stdout=f"[{owner_item}]"),
-        MagicMock(returncode=0, stderr="", stdout=f"[{repo_item}]"),
+def test_census_scopes_cover_owners_and_repos(sut):
+    assert sut.census_scopes(["os-autoinst"], ["openSUSE/qem-bot"]) == [
+        "user:os-autoinst is:pr is:open archived:false",
+        "repo:openSUSE/qem-bot is:pr is:open archived:false",
     ]
-    got = sut.search_candidates(["os-autoinst"], ["openSUSE/qem-bot"], 5)
+
+
+def census_node(*, reviews: str = "", head: str = "h1") -> dict[str, Any]:
+    return {
+        "number": 7779,
+        "title": "A change",
+        "isDraft": False,
+        "createdAt": "2026-08-19T13:54:26Z",
+        "updatedAt": "2026-11-25T23:07:12Z",
+        "headRefOid": head,
+        "repository": {"nameWithOwner": "os-autoinst/openQA"},
+        "author": {"login": "okurz"},
+        "commits": {"nodes": [{"commit": {"committedDate": "2026-11-25T22:41:16Z"}}]},
+        "reviews": {"nodes": json.loads(reviews or "[]")},
+    }
+
+
+def bot_review(state: str, commit: str, submitted: str, login: str = "os-autoinst-review") -> dict[str, Any]:
+    return {"author": {"login": login}, "state": state, "submittedAt": submitted, "commit": {"oid": commit}}
+
+
+def test_facts_from_node_reads_head_reviews_and_author(sut):
+    node = census_node(
+        reviews=json.dumps([
+            bot_review("CHANGES_REQUESTED", "old", "2026-11-24T05:34:43Z"),
+            bot_review("APPROVED", "h1", "2026-11-25T16:24:23Z", login="Martchus"),
+            bot_review("APPROVED", "h1", "2026-11-25T16:24:23Z", login="dependabot[bot]"),
+            bot_review("COMMENTED", "h1", "2026-11-25T07:53:21Z", login="okurz"),
+        ])
+    )
+    facts = sut.facts_from_node(node, "os-autoinst-review")
+    assert (facts.repo, facts.number, facts.author) == ("os-autoinst/openQA", 7779, "okurz")
+    assert (facts.head, facts.head_at) == ("h1", "2026-11-25T22:41:16Z")
+    assert facts.bot_reviews == (sut.BotReview("CHANGES_REQUESTED", "old", "2026-11-24T05:34:43Z"),)
+    assert facts.human_reviewers == 1
+    assert facts.candidate.slug == "os-autoinst-openQA-7779"
+    assert facts.state.has_bot_block is True
+    assert facts.state.blocked_on_head is False
+
+
+def test_census_pages_until_the_scope_is_exhausted(sut, mocker):
+    first = {"pageInfo": {"hasNextPage": True, "endCursor": "c1"}, "nodes": [census_node()]}
+    second = {"pageInfo": {"hasNextPage": False, "endCursor": "c2"}, "nodes": []}
+    run = mocker.patch.object(sut, "run")
+    run.side_effect = [
+        MagicMock(returncode=0, stderr="", stdout=json.dumps({"data": {"search": first}})),
+        MagicMock(returncode=0, stderr="", stdout=json.dumps({"data": {"search": second}})),
+    ]
+    got = sut.fetch_census(["os-autoinst"], [], "os-autoinst-review")
+    assert [facts.number for facts in got] == [7779]
     assert run.call_count == 2
-    assert run.call_args_list[0].args[0][-2:] == ["--owner", "os-autoinst"]
-    assert run.call_args_list[1].args[0][-2:] == ["-R", "openSUSE/qem-bot"]
-    assert {c.repo for c in got} == {"os-autoinst/openQA", "openSUSE/qem-bot"}
+    assert run.call_args_list[0].args[0][:3] == ["gh-as-bot", "api", "graphql"]
+    assert any(arg.startswith("cursor=") for arg in run.call_args_list[1].args[0])
 
 
-def test_search_candidates_reports_gh_failure(sut, mocker):
+def test_census_reports_a_gh_failure(sut, mocker):
     mocker.patch.object(sut, "run", return_value=MagicMock(returncode=1, stderr="boom", stdout=""))
-    with pytest.raises(RuntimeError, match="gh search prs failed: boom"):
-        sut.search_candidates(["os-autoinst"], [], 1)
+    with pytest.raises(RuntimeError, match=r"census failed for user:os-autoinst .*: boom"):
+        sut.fetch_census(["os-autoinst"], [], "os-autoinst-review")
+
+
+def make_facts(
+    sut,
+    *,
+    number=1,
+    repo="os-autoinst/openQA",
+    author="okurz",
+    draft=False,
+    created="2026-11-15T00:00:00Z",
+    updated="2026-11-15T00:00:00Z",
+    head="h1",
+    head_at="2026-11-15T00:00:00Z",
+    reviews=(),
+):
+    return sut.PrFacts(
+        repo=repo,
+        number=number,
+        title="A change",
+        author=author,
+        created_at=created,
+        updated_at=updated,
+        head=head,
+        head_at=head_at,
+        is_draft=draft,
+        bot_reviews=tuple(sut.BotReview(state, commit, submitted) for state, commit, submitted in reviews),
+        human_reviewers=0,
+    )
+
+
+CUTOFF = "2026-11-01T00:00:00Z"
+
+
+def test_obligation_c1_when_the_head_moved_past_the_verdict(sut):
+    facts = make_facts(sut, reviews=[("CHANGES_REQUESTED", "old", "2026-11-01T00:00:00Z")])
+    assert sut.obligation(facts, cutoff=CUTOFF) == ("C1", "2026-11-15T00:00:00Z")
+
+
+def test_obligation_c1_when_the_bot_only_commented_on_an_older_head(sut):
+    facts = make_facts(sut, reviews=[("COMMENTED", "old", "2026-11-01T00:00:00Z")])
+    assert sut.obligation(facts, cutoff=CUTOFF) == ("C1", "2026-11-15T00:00:00Z")
+
+
+def test_obligation_c2_when_activity_follows_the_verdict_on_the_head(sut):
+    facts = make_facts(
+        sut, head="h1", updated="2026-11-20T00:00:00Z", reviews=[("APPROVED", "h1", "2026-11-15T00:00:00Z")]
+    )
+    assert sut.obligation(facts, cutoff=CUTOFF) == ("C2", "2026-11-15T00:00:00Z")
+
+
+def test_obligation_is_none_when_the_verdict_covers_the_head(sut):
+    facts = make_facts(
+        sut, head="h1", updated="2026-11-15T00:00:00Z", reviews=[("APPROVED", "h1", "2026-11-15T00:00:00Z")]
+    )
+    assert sut.obligation(facts, cutoff=CUTOFF) is None
+
+
+@pytest.mark.parametrize(("created", "expected"), [("2026-11-15T00:00:00Z", "C3"), ("2026-08-19T00:00:00Z", "C4")])
+def test_obligation_orders_an_unreviewed_pr_by_age(sut, created, expected):
+    facts = make_facts(sut, created=created)
+    assert sut.obligation(facts, cutoff=CUTOFF) == (expected, created)
+
+
+def test_parse_stamp_reads_both_stamp_forms(sut):
+    assert sut.parse_stamp("2026-11-25T22:41:16Z") == sut.parse_stamp("2026-11-25T23:41:16+01:00")
+
+
+@pytest.mark.parametrize(("seconds", "expected"), [(30, "30s"), (120, "2m"), (7200, "2h"), (864000, "10d")])
+def test_format_wait_picks_the_largest_whole_unit(sut, seconds, expected):
+    assert sut.format_wait(seconds) == expected
+
+
+def test_wait_seconds_measures_the_owed_time(sut):
+    assert sut.wait_seconds("2026-11-20T00:00:00Z", now="2026-11-25T00:00:00Z") == 5 * 86400
+
+
+def test_record_wait_appends_the_class_and_the_wait(sut, tmp_path):
+    ledger = tmp_path / "waits.csv"
+    sut.record_wait(
+        ledger, make_candidate(sut, number=7779), ("C1", "2026-11-20T00:00:00Z"), now="2026-11-25T00:00:00Z"
+    )
+    sut.record_wait(
+        ledger, make_candidate(sut, number=7775), ("C4", "2026-08-19T00:00:00Z"), now="2026-11-25T00:00:00Z"
+    )
+    assert ledger.read_text().splitlines() == [
+        "2026-11-25T00:00:00Z,os-autoinst/openQA,7779,C1,2026-11-20T00:00:00Z,432000",
+        "2026-11-25T00:00:00Z,os-autoinst/openQA,7775,C4,2026-08-19T00:00:00Z,8467200",
+    ]
 
 
 def make_state(sut, *, head="h", **fields: Any):
@@ -137,7 +213,7 @@ def write_log(handle: Any, text: str) -> MagicMock:
     return MagicMock(returncode=0)
 
 
-def test_pr_state_marks_head_review_and_counts_humans(sut, mocker):
+def test_pr_state_marks_head_review(sut, mocker):
     view = MagicMock(returncode=0, stdout="abc123\n", stderr="")
     reviews = MagicMock(
         returncode=0,
@@ -153,9 +229,7 @@ def test_pr_state_marks_head_review_and_counts_humans(sut, mocker):
     run = mocker.patch.object(sut, "run", side_effect=[view, reviews])
     state = sut.pr_state(make_candidate(sut), "os-autoinst-review")
     assert state.reviewed_on_head is True
-    assert state.has_bot_review is True
     assert state.has_bot_block is False
-    assert state.human_reviewers == 1
     assert "--paginate" in run.call_args_list[1].args[0]
     assert "?per_page=100" in run.call_args_list[1].args[0][3]
 
@@ -214,163 +288,90 @@ def test_pr_state_raises_when_reviews_cannot_be_read(sut, mocker):
         sut.pr_state(make_candidate(sut), "os-autoinst-review")
 
 
-@pytest.mark.parametrize(
-    ("humans", "expected"), [("alice\tAPPROVED\tabc123", 1), ("alice\tAPPROVED\ta\nbob\tAPPROVED\tb", 2)]
-)
-def test_pr_state_counts_other_humans_only(sut, mocker, humans, expected):
-    view = MagicMock(returncode=0, stdout="abc123", stderr="")
-    reviews = MagicMock(
-        returncode=0,
-        stdout=f"os-autoinst-review\tAPPROVED\tabc123\nokurz\tCOMMENTED\tabc123\n{humans}\n",
-        stderr="",
-    )
-    mocker.patch.object(sut, "run", side_effect=[view, reviews])
-    state = sut.pr_state(make_candidate(sut, author="okurz"), "os-autoinst-review")
-    assert state.human_reviewers == expected
+def ledger(sut, facts, *, skips=None, cutoff=CUTOFF, **kwargs: Any):
+    candidates, owed = sut.owed_work(facts, "os-autoinst-review", skips=skips or {}, cutoff=cutoff, **kwargs)
+    return [cand.number for cand in candidates], owed
 
 
-def test_filter_candidates_drops_drafts_bot_author_and_reviewed(sut):
-    cands = [
-        make_candidate(sut, number=1, author="okurz"),
-        make_candidate(sut, number=2, author="os-autoinst-review"),
-        make_candidate(sut, number=3, draft=True),
-        make_candidate(sut, number=4, author="perlpunk"),
+def test_owed_work_drops_drafts_bot_authors_and_dependency_bots(sut):
+    facts = [
+        make_facts(sut, number=1),
+        make_facts(sut, number=2, author="os-autoinst-review"),
+        make_facts(sut, number=3, draft=True),
+        make_facts(sut, number=4, author="dependabot[bot]"),
     ]
-    kept, states = sut.filter_candidates(
-        cands,
-        "os-autoinst-review",
-        skip_reviewed=True,
-        state_lookup=lambda c, _l: make_state(sut, reviewed_on_head=c.number == 1),
-    )
-    assert [c.number for c in kept] == [4]
-    assert set(states) == {("os-autoinst/openQA", 1), ("os-autoinst/openQA", 4)}
+    assert ledger(sut, facts)[0] == [1]
+    assert ledger(sut, facts, include_bots=True)[0] == [1, 4]
 
 
-def test_filter_candidates_skips_dependency_bots_by_default(sut):
-    cands = [make_candidate(sut, number=1, author="dependabot[bot]"), make_candidate(sut, number=2)]
-    kept, _ = sut.filter_candidates(
-        cands, "os-autoinst-review", skip_reviewed=False, state_lookup=lambda _c, _l: make_state(sut)
-    )
-    assert [c.number for c in kept] == [2]
-    kept, _ = sut.filter_candidates(
-        cands,
-        "os-autoinst-review",
-        skip_reviewed=False,
-        include_bots=True,
-        state_lookup=lambda _c, _l: make_state(sut),
-    )
-    assert [c.number for c in kept] == [1, 2]
+def test_owed_work_only_blocked_keeps_the_bot_block(sut):
+    block = [("CHANGES_REQUESTED", "old", "2026-11-01T00:00:00Z")]
+    facts = [make_facts(sut, number=1), make_facts(sut, number=2, reviews=block), make_facts(sut, number=3)]
+    assert ledger(sut, facts, only_blocked=True)[0] == [2]
 
 
-def test_filter_candidates_skips_candidate_with_unreadable_state(sut, capsys):
-    cands = [make_candidate(sut, number=1), make_candidate(sut, number=2)]
-
-    def lookup(cand: Any, _login: str) -> Any:
-        if cand.number == 1:
-            msg = "api down"
-            raise RuntimeError(msg)
-        return make_state(sut)
-
-    kept, _ = sut.filter_candidates(cands, "os-autoinst-review", skip_reviewed=True, state_lookup=lookup)
-    assert [c.number for c in kept] == [2]
-    assert "skip os-autoinst/openQA#1: api down" in capsys.readouterr().err
+def test_owed_work_drops_a_head_the_bot_deliberately_skipped(sut):
+    facts = [make_facts(sut, number=1, head="h1")]
+    assert ledger(sut, facts, skips={"os-autoinst/openQA#1": "h1"})[0] == []
+    assert ledger(sut, facts, skips={"os-autoinst/openQA#1": "old"})[0] == [1]
+    assert ledger(sut, facts, skips={"os-autoinst/openQA#1": "h1"}, recheck=True)[0] == [1]
 
 
-def test_filter_candidates_only_blocked_keeps_the_bot_block(sut):
-    cands = [make_candidate(sut, number=1), make_candidate(sut, number=2), make_candidate(sut, number=3)]
-    kept, _ = sut.filter_candidates(
-        cands,
-        "os-autoinst-review",
-        skip_reviewed=False,
-        only_blocked=True,
-        state_lookup=lambda c, _l: make_state(sut, has_bot_review=c.number != 3, has_bot_block=c.number == 2),
-    )
-    assert [c.number for c in kept] == [2]
-
-
-def test_filter_candidates_recheck_keeps_reviewed(sut):
-    cand = make_candidate(sut, number=1)
-    kept, _ = sut.filter_candidates(
-        [cand],
-        "os-autoinst-review",
-        skip_reviewed=False,
-        state_lookup=lambda _c, _l: make_state(sut, reviewed_on_head=True),
-    )
-    assert kept == [cand]
-
-
-def test_filter_candidates_drops_a_head_the_bot_deliberately_skipped(sut):
-    cand = make_candidate(sut, number=1)
-    kept, _ = sut.filter_candidates(
-        [cand],
-        "os-autoinst-review",
-        skip_reviewed=True,
-        skips={"os-autoinst/openQA#1": "h"},
-        state_lookup=lambda _c, _l: make_state(sut, head="h"),
-    )
-    assert kept == []
-
-
-def test_filter_candidates_keeps_a_skipped_pr_after_a_new_push(sut):
-    cand = make_candidate(sut, number=1)
-    kept, _ = sut.filter_candidates(
-        [cand],
-        "os-autoinst-review",
-        skip_reviewed=True,
-        skips={"os-autoinst/openQA#1": "old"},
-        state_lookup=lambda _c, _l: make_state(sut, head="new"),
-    )
-    assert kept == [cand]
-
-
-def test_filter_candidates_recheck_keeps_a_skipped_pr(sut):
-    cand = make_candidate(sut, number=1)
-    kept, _ = sut.filter_candidates(
-        [cand],
-        "os-autoinst-review",
-        skip_reviewed=False,
-        skips={"os-autoinst/openQA#1": "h"},
-        state_lookup=lambda _c, _l: make_state(sut, head="h"),
-    )
-    assert kept == [cand]
-
-
-def test_filter_candidates_keeps_all_eligible_so_priority_can_sort(sut):
-    cands = [make_candidate(sut, number=n) for n in range(1, 6)]
-    kept, _ = sut.filter_candidates(
-        cands,
-        "os-autoinst-review",
-        skip_reviewed=True,
-        state_lookup=lambda c, _l: make_state(sut, reviewed_on_head=c.number == 1),
-    )
-    assert [c.number for c in kept] == [2, 3, 4, 5]
-
-
-def test_select_candidates_orders_by_priority_then_date(sut):
-    cands = [
-        make_candidate(sut, number=1, created="2026-02-01"),
-        make_candidate(sut, number=2, created="2026-01-01"),
-        make_candidate(sut, number=3, created="2026-03-01"),
-        make_candidate(sut, number=4, created="2025-12-01"),
-    ]
-    states = {
-        ("os-autoinst/openQA", 1): make_state(sut, has_bot_block=True),
-        ("os-autoinst/openQA", 2): make_state(sut),
-        ("os-autoinst/openQA", 3): make_state(sut, has_bot_review=True),
-        ("os-autoinst/openQA", 4): make_state(sut),
+def test_owed_work_reports_the_class_and_the_owed_since(sut):
+    moved = [("CHANGES_REQUESTED", "old", "2026-11-01T00:00:00Z")]
+    facts = [make_facts(sut, number=1, reviews=moved), make_facts(sut, number=4, created="2026-08-19T00:00:00Z")]
+    _, owed = ledger(sut, facts)
+    assert owed == {
+        ("os-autoinst/openQA", 1): ("C1", "2026-11-15T00:00:00Z"),
+        ("os-autoinst/openQA", 4): ("C4", "2026-08-19T00:00:00Z"),
     }
-    assert [c.number for c in sut.select_candidates(cands, 4, states=states)] == [1, 2, 4, 3]
-    assert [c.number for c in sut.select_candidates(cands, 4, oldest=True, states=states)] == [1, 4, 2, 3]
 
 
-def test_select_candidates_newest_first_and_limited(sut):
-    cands = [
-        make_candidate(sut, number=1, created="2026-02-01"),
-        make_candidate(sut, number=2, created="2026-01-01"),
-        make_candidate(sut, number=3, created="2026-03-01"),
+def test_owed_work_recheck_adds_the_c5_class(sut):
+    covered = [("APPROVED", "h1", "2026-11-15T00:00:00Z")]
+    facts = [make_facts(sut, number=1, reviews=covered)]
+    assert ledger(sut, facts)[0] == []
+    assert ledger(sut, facts, recheck=True)[1] == {("os-autoinst/openQA", 1): ("C5", "2026-11-15T00:00:00Z")}
+
+
+@pytest.mark.parametrize(("shard", "expected"), [((1, 3), [1, 4]), ((2, 3), [2]), ((3, 3), [3])])
+def test_owed_work_shards_partition_the_universe(sut, shard, expected):
+    facts = [make_facts(sut, number=n) for n in range(1, 5)]
+    assert ledger(sut, facts, shard=shard)[0] == expected
+
+
+def test_select_owed_reserves_slots_for_the_backlog(sut):
+    moved = [("CHANGES_REQUESTED", "old", "2026-11-01T00:00:00Z")]
+    facts = [make_facts(sut, number=n, reviews=moved) for n in range(1, 6)]
+    facts.extend((
+        make_facts(sut, number=10, created="2026-11-10T00:00:00Z"),
+        make_facts(sut, number=20, created="2026-08-19T00:00:00Z"),
+    ))
+    candidates, owed = sut.owed_work(facts, "os-autoinst-review", skips={}, cutoff=CUTOFF)
+    assert [cand.number for cand in sut.select_owed(candidates, owed, 4)] == [1, 2, 10, 20]
+
+
+def test_select_owed_orders_by_class_then_owed_age(sut):
+    moved = [("CHANGES_REQUESTED", "old", "2026-11-01T00:00:00Z")]
+    facts = [
+        make_facts(sut, number=1, reviews=moved),
+        make_facts(sut, number=2, created="2026-08-19T00:00:00Z"),
+        make_facts(sut, number=3, created="2026-11-10T00:00:00Z"),
     ]
-    assert [c.number for c in sut.select_candidates(cands, 2)] == [3, 1]
-    assert [c.number for c in sut.select_candidates(cands, 2, oldest=True)] == [2, 1]
+    candidates, owed = sut.owed_work(facts, "os-autoinst-review", skips={}, cutoff=CUTOFF)
+    assert [cand.number for cand in sut.select_owed(candidates, owed, 3)] == [1, 3, 2]
+    assert [cand.number for cand in sut.select_owed(candidates, owed, 1)] == [1]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [("1/3", (1, 3)), ("3/3", (3, 3)), ("0/3", None), ("4/3", None), ("x", None)]
+)
+def test_parse_shard_accepts_one_based_ranges_only(sut, value, expected):
+    if expected is None:
+        with pytest.raises(argparse.ArgumentTypeError):
+            sut.parse_shard(value)
+    else:
+        assert sut.parse_shard(value) == expected
 
 
 def test_review_command_pi_is_default_and_forwards_model_and_extra_args(sut, tmp_path):
@@ -588,8 +589,8 @@ def test_parse_args_defaults(sut):
     assert args.limit == sut.DEFAULT_LIMIT
     assert args.dry_run is False
     assert args.list is False
-    assert args.oldest is False
-    assert args.window == 0
+    assert args.shard is None
+    assert not args.cache
     assert args.timeout == sut.DEFAULT_TIMEOUT
     assert args.include_bots is False
     assert args.recheck is False
@@ -630,32 +631,38 @@ def test_parse_args_runner_options_reach_the_command(sut, argv, expected, tmp_pa
 
 
 def test_main_list_prints_selection_without_reviewing(sut, mocker, capsys):
-    cands = [make_candidate(sut, number=1)]
-    states = {("os-autoinst/openQA", 1): make_state(sut)}
-    mocker.patch.object(sut, "bot_login", return_value="bot")
-    mocker.patch.object(sut, "search_candidates", return_value=cands)
-    mocker.patch.object(sut, "filter_candidates", return_value=(cands, states))
+    patch_cycle(sut, mocker, [make_facts(sut, number=1)])
     run_review = mocker.patch.object(sut, "run_review")
     assert sut.main(["--owner", "os-autoinst", "--list"]) == 0
     out = capsys.readouterr().out
-    assert "os-autoinst/openQA#1" in out
+    assert out.split("\t")[:3] == ["os-autoinst/openQA#1", "C3", "2026-11-15"]
     run_review.assert_not_called()
 
 
-def test_main_reports_the_searched_window_when_empty(sut, mocker, capsys):
-    mocker.patch.object(sut, "bot_login", return_value="bot")
-    mocker.patch.object(sut, "search_candidates", return_value=[])
+def test_main_reports_nothing_owed_when_the_census_is_empty(sut, mocker, capsys):
+    patch_cycle(sut, mocker, [])
+    assert sut.main(["--owner", "os-autoinst", "--limit", "2"]) == 0
+    assert "nothing owed for os-autoinst" in capsys.readouterr().err
+
+
+def test_main_reports_a_census_of_prs_that_owe_nothing(sut, mocker, capsys):
+    covered = make_facts(sut, reviews=[("APPROVED", "h1", "2026-11-15T00:00:00Z")])
+    patch_cycle(sut, mocker, [covered])
     assert sut.main(["--owner", "os-autoinst", "--limit", "2"]) == 0
     err = capsys.readouterr().err
-    assert "newest 50 open PRs by updated" in err
-    assert "--oldest" in err
+    assert "census: 1 open PRs, 0 owed, 0 eligible" in err
+    assert "nothing owed" in err
 
 
-def test_main_reports_the_creation_window_of_a_backlog_sweep(sut, mocker, capsys):
+def patch_cycle(sut, mocker, facts, *, checkouts=None, skip_cache=None):
+    """Wire one cycle to a fixed census and cutoff so a test decides what the bot owes."""
     mocker.patch.object(sut, "bot_login", return_value="bot")
-    mocker.patch.object(sut, "search_candidates", return_value=[])
-    assert sut.main(["--owner", "os-autoinst", "--limit", "2", "--oldest"]) == 0
-    assert "oldest 50 open PRs by created" in capsys.readouterr().err
+    mocker.patch.object(sut, "fetch_census", return_value=facts)
+    mocker.patch.object(sut, "stamp_days_ago", return_value=CUTOFF)
+    if checkouts is not None:
+        mocker.patch.object(sut, "discover_checkouts", return_value=checkouts)
+    if skip_cache is not None:
+        mocker.patch.object(sut, "cache_dir", return_value=skip_cache)
 
 
 def test_main_requires_a_scope(sut, mocker, capsys):
@@ -664,23 +671,20 @@ def test_main_requires_a_scope(sut, mocker, capsys):
     assert "give --owner" in capsys.readouterr().err
 
 
-def test_main_reports_a_search_failure_without_a_traceback(sut, mocker, capsys):
+def test_main_reports_a_census_failure_without_a_traceback(sut, mocker, capsys):
     mocker.patch.object(sut, "bot_login", return_value="bot")
-    mocker.patch.object(sut, "search_candidates", side_effect=RuntimeError("gh down"))
+    mocker.patch.object(sut, "fetch_census", side_effect=RuntimeError("gh down"))
     assert sut.main(["--owner", "os-autoinst"]) == 1
-    assert "search failed: gh down" in capsys.readouterr().err
-
-
-def states_for(sut, cands, **fields: Any):
-    return {(cand.repo, cand.number): make_state(sut, **fields) for cand in cands}
+    assert "census failed: gh down" in capsys.readouterr().err
 
 
 def test_main_runs_each_selected_pr(sut, tmp_path, mocker, capsys):
-    cands = [make_candidate(sut, number=1), make_candidate(sut, number=2)]
-    mocker.patch.object(sut, "bot_login", return_value="bot")
-    mocker.patch.object(sut, "search_candidates", return_value=cands)
-    mocker.patch.object(sut, "filter_candidates", return_value=(cands, states_for(sut, cands)))
-    mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
+    patch_cycle(
+        sut,
+        mocker,
+        [make_facts(sut, number=1), make_facts(sut, number=2)],
+        checkouts={"os-autoinst/openQA": tmp_path},
+    )
     mocker.patch.object(
         sut,
         "pr_state",
@@ -698,11 +702,7 @@ def test_main_runs_each_selected_pr(sut, tmp_path, mocker, capsys):
 
 
 def test_main_counts_a_posted_review_after_a_timeout_as_ok(sut, tmp_path, mocker, capsys):
-    cands = [make_candidate(sut, number=1)]
-    mocker.patch.object(sut, "bot_login", return_value="bot")
-    mocker.patch.object(sut, "search_candidates", return_value=cands)
-    mocker.patch.object(sut, "filter_candidates", return_value=(cands, states_for(sut, cands)))
-    mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
+    patch_cycle(sut, mocker, [make_facts(sut)], checkouts={"os-autoinst/openQA": tmp_path})
     mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=False, log="/log/1"))
     mocker.patch.object(sut, "pr_state", return_value=make_state(sut, reviewed_on_head=True))
     code = sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
@@ -711,27 +711,19 @@ def test_main_counts_a_posted_review_after_a_timeout_as_ok(sut, tmp_path, mocker
 
 
 def test_main_counts_a_skipped_session_as_ok_and_records_the_head(sut, tmp_path, mocker, capsys):
-    cands = [make_candidate(sut, number=1)]
-    mocker.patch.object(sut, "bot_login", return_value="bot")
-    mocker.patch.object(sut, "search_candidates", return_value=cands)
-    mocker.patch.object(sut, "filter_candidates", return_value=(cands, states_for(sut, cands, head="abc123")))
-    mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
+    patch_cycle(
+        sut, mocker, [make_facts(sut, head="abc123")], checkouts={"os-autoinst/openQA": tmp_path}, skip_cache=tmp_path
+    )
     mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=True, skipped=True, log="/log/1"))
     mocker.patch.object(sut, "pr_state", side_effect=AssertionError("a skip needs no API lookup"))
-    cache = tmp_path / "skipped.json"
-    mocker.patch.object(sut, "SKIP_CACHE", cache)
     code = sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
     assert code == 0
     assert "skip  os-autoinst/openQA#1" in capsys.readouterr().err
-    assert sut.load_skips(cache) == {"os-autoinst/openQA#1": "abc123"}
+    assert sut.load_skips(tmp_path / "skipped.json") == {"os-autoinst/openQA#1": "abc123"}
 
 
 def test_main_marks_an_unposted_session_as_failed(sut, tmp_path, mocker, capsys):
-    cands = [make_candidate(sut, number=1)]
-    mocker.patch.object(sut, "bot_login", return_value="bot")
-    mocker.patch.object(sut, "search_candidates", return_value=cands)
-    mocker.patch.object(sut, "filter_candidates", return_value=(cands, states_for(sut, cands)))
-    mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
+    patch_cycle(sut, mocker, [make_facts(sut)], checkouts={"os-autoinst/openQA": tmp_path})
     mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=True, log="/log/1"))
     mocker.patch.object(sut, "pr_state", return_value=make_state(sut))
     code = sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
@@ -740,12 +732,12 @@ def test_main_marks_an_unposted_session_as_failed(sut, tmp_path, mocker, capsys)
 
 
 def test_main_forces_comment_when_the_bot_already_requested_changes(sut, tmp_path, mocker):
-    cands = [make_candidate(sut, number=1)]
-    states = states_for(sut, cands, has_bot_block=True, blocked_on_head=True)
-    mocker.patch.object(sut, "bot_login", return_value="bot")
-    mocker.patch.object(sut, "search_candidates", return_value=cands)
-    mocker.patch.object(sut, "filter_candidates", return_value=(cands, states))
-    mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
+    blocked = make_facts(
+        sut,
+        updated="2026-11-20T00:00:00Z",
+        reviews=[("CHANGES_REQUESTED", "h1", "2026-11-15T00:00:00Z")],
+    )
+    patch_cycle(sut, mocker, [blocked], checkouts={"os-autoinst/openQA": tmp_path})
     mocker.patch.object(sut, "pr_state", return_value=make_state(sut, reviewed_on_head=True))
     run_review = mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=True, log="/log/1"))
     sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
@@ -753,12 +745,8 @@ def test_main_forces_comment_when_the_bot_already_requested_changes(sut, tmp_pat
 
 
 def test_main_reviews_a_new_head_for_a_new_verdict(sut, tmp_path, mocker):
-    cands = [make_candidate(sut, number=1)]
-    states = states_for(sut, cands, has_bot_block=True, blocked_on_head=False)
-    mocker.patch.object(sut, "bot_login", return_value="bot")
-    mocker.patch.object(sut, "search_candidates", return_value=cands)
-    mocker.patch.object(sut, "filter_candidates", return_value=(cands, states))
-    mocker.patch.object(sut, "discover_checkouts", return_value={"os-autoinst/openQA": tmp_path})
+    moved = make_facts(sut, reviews=[("CHANGES_REQUESTED", "old", "2026-11-01T00:00:00Z")])
+    patch_cycle(sut, mocker, [moved], checkouts={"os-autoinst/openQA": tmp_path})
     mocker.patch.object(sut, "pr_state", return_value=make_state(sut, has_bot_block=True))
     run_review = mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=True, log="/log/1"))
     sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
@@ -812,3 +800,18 @@ def test_run_review_passes_post_env_only_for_live_runs(sut, tmp_path, mocker):
     assert "REVIEW_BOT_POST" not in proc.call_args.kwargs["env"]
     sut.run_review(make_candidate(sut), tmp_path, dry_run=False, log_dir=tmp_path, timeout=5)
     assert proc.call_args.kwargs["env"]["REVIEW_BOT_POST"] == "1"
+
+
+def test_select_owed_holds_the_reserves_back_from_a_flood_of_urgent_work(sut):
+    moved = [("CHANGES_REQUESTED", "old", "2026-11-01T00:00:00Z")]
+    quiet = [("APPROVED", "h1", "2026-11-01T00:00:00Z")]
+    facts = [make_facts(sut, number=n, reviews=moved) for n in range(1, 7)]
+    facts.extend(make_facts(sut, number=n, updated="2026-11-20T00:00:00Z", reviews=quiet) for n in range(10, 18))
+    facts.extend((
+        make_facts(sut, number=30, created="2026-11-10T00:00:00Z"),
+        make_facts(sut, number=40, created="2026-08-19T00:00:00Z"),
+    ))
+    candidates, owed = sut.owed_work(facts, "os-autoinst-review", skips={}, cutoff=CUTOFF)
+    selected = [cand.number for cand in sut.select_owed(candidates, owed, 12)]
+    assert len(selected) == 12
+    assert selected[-2:] == [30, 40]
