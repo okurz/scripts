@@ -556,12 +556,57 @@ def test_record_skip_keys_the_head_by_repo_and_number(sut, tmp_path):
 
 def test_confirm_posted_accepts_a_skip_without_a_review(sut, mocker):
     mocker.patch.object(sut, "pr_state", side_effect=AssertionError("a skip needs no API lookup"))
-    assert sut.confirm_posted(make_candidate(sut), "bot", make_outcome(sut, ok=True, skipped=True), dry_run=False)
+
+    assert sut.confirm_posted(make_candidate(sut), "bot", make_outcome(sut, ok=True, skipped=True), dry_run=False) == (
+        True,
+        "",
+    )
 
 
 def test_confirm_posted_rejects_a_skip_that_failed(sut, mocker):
     mocker.patch.object(sut, "pr_state", side_effect=AssertionError("a skip needs no API lookup"))
-    assert not sut.confirm_posted(make_candidate(sut), "bot", make_outcome(sut, ok=False, skipped=True), dry_run=False)
+
+    assert sut.confirm_posted(make_candidate(sut), "bot", make_outcome(sut, ok=False, skipped=True), dry_run=False) == (
+        False,
+        "",
+    )
+
+
+def test_confirm_posted_keeps_a_dry_run_single_shot(sut, mocker):
+    read = mocker.patch.object(sut, "pr_state", side_effect=AssertionError("a dry run needs no lookup"))
+    waits = mocker.patch.object(sut, "pause")
+
+    assert sut.confirm_posted(make_candidate(sut), "bot", make_outcome(sut, ok=True), dry_run=True) == (True, "")
+    read.assert_not_called()
+    waits.assert_not_called()
+
+
+def test_confirm_posted_retries_until_the_review_is_visible(sut, mocker):
+    waits = mocker.patch.object(sut, "pause")
+    read = mocker.patch.object(
+        sut,
+        "pr_state",
+        side_effect=[
+            make_state(sut, head="h1"),
+            make_state(sut, head="h1"),
+            make_state(sut, head="h1", reviewed_on_head=True),
+        ],
+    )
+
+    assert sut.confirm_posted(make_candidate(sut), "bot", make_outcome(sut, ok=False), dry_run=False) == (True, "")
+    assert read.call_count == 3
+    assert [entry.args[0] for entry in waits.call_args_list] == list(sut.CONFIRM_WAITS_S)
+
+
+def test_confirm_posted_gives_up_after_the_last_attempt(sut, mocker):
+    mocker.patch.object(sut, "pause")
+    read = mocker.patch.object(sut, "pr_state", return_value=make_state(sut, head="h1"))
+
+    assert sut.confirm_posted(make_candidate(sut), "bot", make_outcome(sut, ok=False), dry_run=False) == (
+        False,
+        "review not visible on h1",
+    )
+    assert read.call_count == sut.CONFIRM_ATTEMPTS
 
 
 def test_discover_checkouts_maps_only_github_remotes(sut, tmp_path, mocker):
@@ -765,10 +810,11 @@ def test_main_runs_each_selected_pr(sut, tmp_path, mocker, capsys):
         [make_facts(sut, number=1), make_facts(sut, number=2)],
         checkouts={"os-autoinst/openQA": tmp_path},
     )
+    mocker.patch.object(sut, "pause")
     mocker.patch.object(
         sut,
         "pr_state",
-        side_effect=[make_state(sut, reviewed_on_head=True), make_state(sut)],
+        side_effect=[make_state(sut, reviewed_on_head=True), *[make_state(sut)] * sut.CONFIRM_ATTEMPTS],
     )
     run_review = mocker.patch.object(
         sut,
@@ -802,6 +848,7 @@ def test_main_counts_a_skipped_session_as_ok_and_records_the_head(sut, tmp_path,
 
 def test_main_marks_an_unposted_session_as_failed(sut, tmp_path, mocker, capsys):
     patch_cycle(sut, mocker, [make_facts(sut)], checkouts={"os-autoinst/openQA": tmp_path})
+    mocker.patch.object(sut, "pause")
     mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=True, log="/log/1"))
     mocker.patch.object(sut, "pr_state", return_value=make_state(sut))
     code = sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
@@ -825,6 +872,7 @@ def test_main_forces_comment_when_the_bot_already_requested_changes(sut, tmp_pat
 def test_main_reviews_a_new_head_for_a_new_verdict(sut, tmp_path, mocker):
     moved = make_facts(sut, reviews=[("CHANGES_REQUESTED", "old", "2026-11-01T00:00:00Z")])
     patch_cycle(sut, mocker, [moved], checkouts={"os-autoinst/openQA": tmp_path})
+    mocker.patch.object(sut, "pause")
     mocker.patch.object(sut, "pr_state", return_value=make_state(sut, has_bot_block=True))
     run_review = mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=True, log="/log/1"))
     sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
@@ -1047,10 +1095,11 @@ def test_ensure_checkout_reports_a_failed_clone(sut, tmp_path, fake_subprocess):
 
 
 def test_confirm_posted_is_false_when_the_state_cannot_be_read(sut, mocker):
+    mocker.patch.object(sut, "pause")
     mocker.patch.object(sut, "pr_state", side_effect=RuntimeError("502"))
     outcome = make_outcome(sut, ok=True)
 
-    assert sut.confirm_posted(make_candidate(sut), "bot", outcome, dry_run=False) is False
+    assert sut.confirm_posted(make_candidate(sut), "bot", outcome, dry_run=False) == (False, "502")
 
 
 def test_infer_owner_reads_the_origin(sut, fake_subprocess):
@@ -1099,7 +1148,7 @@ def test_review_candidate_reports_a_dispatch_failure(sut, tmp_path, mocker, caps
 def test_review_candidate_does_not_write_the_ledger_in_a_dry_run(sut, tmp_path, mocker):
     mocker.patch.object(sut, "ensure_checkout", return_value=tmp_path)
     mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=True, log="/log/1"))
-    mocker.patch.object(sut, "confirm_posted", return_value=True)
+    mocker.patch.object(sut, "confirm_posted", return_value=(True, ""))
     record_wait = mocker.patch.object(sut, "record_wait")
 
     sut.review_candidate(
@@ -1124,3 +1173,26 @@ def test_pause_sleeps(sut, mocker):
     sut.pause(2.5)
 
     clock.sleep.assert_called_once_with(2.5)
+
+
+def test_review_candidate_reports_why_the_confirmation_failed(sut, tmp_path, mocker, capsys):
+    mocker.patch.object(sut, "ensure_checkout", return_value=tmp_path)
+    mocker.patch.object(sut, "pause")
+    mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=True, log="/log/1"))
+    mocker.patch.object(sut, "pr_state", return_value=make_state(sut, head="abc123"))
+
+    sut.review_candidate(
+        make_candidate(sut),
+        make_state(sut),
+        ("C1", CUTOFF),
+        args=review_args(),
+        checkouts={},
+        log_dir=tmp_path,
+        login="bot",
+        skips={},
+        cache=tmp_path,
+    )
+
+    err = capsys.readouterr().err
+    assert "FAILED  os-autoinst/openQA#1" in err
+    assert "review not visible on abc123" in err

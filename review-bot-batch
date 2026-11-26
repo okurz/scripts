@@ -51,6 +51,8 @@ WAIT_COLUMNS_V2 = 7
 WAIT_COLUMNS_V1 = 6
 WAIT_RETENTION_DAYS = 7
 MAX_WAIT_ROWS = 5000
+CONFIRM_ATTEMPTS = 3
+CONFIRM_WAITS_S = (2.0, 5.0)
 FRESH_DAYS = 14
 CLASS_ORDER = ("C1", "C2", "C3", "C4", "C5")
 CLASS_RESERVES = {"C3": 1, "C4": 2}
@@ -741,14 +743,32 @@ def run_review(
     return ReviewOutcome(ok=review_succeeded(res.returncode, output), skipped=review_skipped(output), log=log)
 
 
-def confirm_posted(cand: Candidate, login: str, outcome: ReviewOutcome, *, dry_run: bool) -> bool:
-    """Treat the head state from the API as the source of truth, even on exit 0."""
+def pause(seconds: float) -> None:
+    """Wait between watch cycles and between confirmation reads; the seam keeps tests off the clock."""
+    time.sleep(seconds)
+
+
+def confirm_posted(cand: Candidate, login: str, outcome: ReviewOutcome, *, dry_run: bool) -> tuple[bool, str]:
+    """Return whether the review is visible on the head, and why not when it is not.
+
+    The API is the source of truth, so a review that is still propagating is re-read a bounded
+    number of times before the post counts as failed.
+    """
     if outcome.skipped or dry_run:
-        return outcome.ok
-    try:
-        return pr_state(cand, login).reviewed_on_head
-    except RuntimeError:
-        return False
+        return outcome.ok, ""
+    reason = ""
+    for attempt in range(CONFIRM_ATTEMPTS):
+        if attempt:
+            pause(CONFIRM_WAITS_S[attempt - 1])
+        try:
+            state = pr_state(cand, login)
+        except RuntimeError as err:
+            reason = str(err)
+            continue
+        if state.reviewed_on_head:
+            return True, ""
+        reason = f"review not visible on {state.head}"
+    return False, reason
 
 
 def cycle_log_dir(base: Path, cycle: int) -> Path:
@@ -874,9 +894,10 @@ def review_candidate(
         record_skip(cache / SKIP_LEDGER, cand, state, skips)
     if not args.dry_run:
         record_wait(cache / WAITS_FILE, cand, owed, cycle=log_dir.name)
-    ok = confirm_posted(cand, login, outcome, dry_run=args.dry_run)
+    ok, reason = confirm_posted(cand, login, outcome, dry_run=args.dry_run)
     status = "skip" if outcome.skipped else ("ok" if ok else "FAILED")
-    print(f"{status}  {cand.repo}#{cand.number}  {label}  log={outcome.log}", file=sys.stderr)
+    detail = f"  {reason}" if reason else ""
+    print(f"{status}  {cand.repo}#{cand.number}  {label}  log={outcome.log}{detail}", file=sys.stderr)
     return ok
 
 
@@ -962,11 +983,6 @@ def run_watch_cycle(args: argparse.Namespace, base: Path, cycle: int) -> None:
         run_cycle(cycle_args)
     except (RuntimeError, OSError, ValueError, KeyError) as err:
         print(f"cycle failed: {err}", file=sys.stderr)
-
-
-def pause(seconds: float) -> None:
-    """Wait between watch cycles; the seam keeps a test off the shared clock."""
-    time.sleep(seconds)
 
 
 def main(argv: list[str] | None = None) -> int:
