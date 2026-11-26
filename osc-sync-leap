@@ -95,8 +95,8 @@ def sync(
 
         # Create PR using tea
         upstream_url = run_command(["git", "remote", "get-url", upstream], capture_output=True, dry_run=dry_run)
-        match = re.search(r"[:/]([^:/]+/[^:/]+)\.git$", upstream_url)
-        repo_path = match.group(1) if match else upstream_url.split(":")[-1].replace(".git", "")
+        match = re.search(r"[:/]([^:/]+/[^:/]+?)(?:\.git)?$", upstream_url)
+        repo_path = match.group(1) if match else upstream_url
 
         tea_cmd = [
             "tea",
