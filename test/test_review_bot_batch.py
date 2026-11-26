@@ -57,7 +57,7 @@ def test_search_candidates_uses_owner_scope(sut, mocker):
     assert cmd[:2] == ["gh-as-bot", "search"]
     assert "--owner" in cmd
     assert cmd[cmd.index("--owner") + 1] == "os-autoinst"
-    assert cmd[cmd.index("--sort") + 1] == "created"
+    assert cmd[cmd.index("--sort") + 1] == "updated"
     assert cmd[cmd.index("--order") + 1] == "desc"
     assert "os-autoinst/openQA" not in cmd
     assert got[0].repo == "os-autoinst/openQA"
@@ -76,7 +76,22 @@ def test_search_candidates_oldest_scope(sut, mocker):
     run.return_value = MagicMock(returncode=0, stderr="", stdout="[]")
     sut.search_candidates(["os-autoinst"], [], 1, oldest=True)
     cmd = run.call_args.args[0]
+    assert cmd[cmd.index("--sort") + 1] == "created"
     assert cmd[cmd.index("--order") + 1] == "asc"
+
+
+@pytest.mark.parametrize(("sort", "expected"), [("created", "created"), ("updated", "updated")])
+def test_search_candidates_honours_an_explicit_sort(sut, mocker, sort, expected):
+    run = mocker.patch.object(sut, "run")
+    run.return_value = MagicMock(returncode=0, stderr="", stdout="[]")
+    sut.search_candidates(["os-autoinst"], [], 1, oldest=True, sort=sort)
+    assert run.call_args.args[0][run.call_args.args[0].index("--sort") + 1] == expected
+
+
+def test_search_sort_defaults_to_recent_activity(sut):
+    assert sut.search_sort("", oldest=False) == "updated"
+    assert sut.search_sort("", oldest=True) == "created"
+    assert sut.search_sort("updated", oldest=True) == "updated"
 
 
 def test_search_candidates_uses_repo_scope(sut, mocker):
@@ -629,8 +644,15 @@ def test_main_reports_the_searched_window_when_empty(sut, mocker, capsys):
     mocker.patch.object(sut, "search_candidates", return_value=[])
     assert sut.main(["--owner", "os-autoinst", "--limit", "2"]) == 0
     err = capsys.readouterr().err
-    assert "newest 50 open PRs" in err
+    assert "newest 50 open PRs by updated" in err
     assert "--oldest" in err
+
+
+def test_main_reports_the_creation_window_of_a_backlog_sweep(sut, mocker, capsys):
+    mocker.patch.object(sut, "bot_login", return_value="bot")
+    mocker.patch.object(sut, "search_candidates", return_value=[])
+    assert sut.main(["--owner", "os-autoinst", "--limit", "2", "--oldest"]) == 0
+    assert "oldest 50 open PRs by created" in capsys.readouterr().err
 
 
 def test_main_requires_a_scope(sut, mocker, capsys):

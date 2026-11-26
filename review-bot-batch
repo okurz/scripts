@@ -4,7 +4,9 @@
 Resolves a scope (an org or a list of repositories) with ``gh search prs``, drops drafts,
 bot-authored PRs and PRs the bot already reviewed on the current head, then ranks the rest:
 PRs the bot currently blocks, then unreviewed PRs with at most one human reviewer, then
-everything else. ``--only-blocked`` narrows the batch to the blocked PRs alone. One review
+everything else. The search window holds the most recently updated open PRs, so a push to an
+old PR re-enters it; ``--sort created`` (implied by ``--oldest``) sweeps creation order instead.
+``--only-blocked`` narrows the batch to the blocked PRs alone. One review
 session runs serially in the matching local checkout; a blocked PR gets a comment instead of
 a second block. A session that finds nothing new posts no review and ends with ``--- REVIEW
 SKIPPED``; its head is recorded in ``<cache>/skipped.json`` so a later cycle does not ask again.
@@ -38,6 +40,8 @@ DEFAULT_LIMIT = 10
 DEFAULT_TIMEOUT = 1200.0
 DEFAULT_INTERVAL = 1200.0
 MAX_SEARCH_LIMIT = 1000
+SEARCH_SORTS = ("created", "updated")
+DEFAULT_SORT = "updated"
 SEARCH_FIELDS = "number,title,isDraft,author,createdAt,repository"
 REVIEW_STATES = frozenset({"APPROVED", "CHANGES_REQUESTED", "COMMENTED"})
 REVIEW_ENTRY_FIELDS = 3
@@ -125,7 +129,12 @@ def search_window(limit: int, window: int = 0) -> int:
     return min(max(window or max(limit * 10, 50), limit), MAX_SEARCH_LIMIT)
 
 
-def search_scope(scope: list[str], limit: int, *, oldest: bool, window: int) -> list[Candidate]:
+def search_sort(sort: str, *, oldest: bool) -> str:
+    """Return the sort key; a backlog sweep keeps creation order unless the caller chose one."""
+    return sort or ("created" if oldest else DEFAULT_SORT)
+
+
+def search_scope(scope: list[str], limit: int, *, oldest: bool, window: int, sort: str = "") -> list[Candidate]:
     """Enumerate open PRs for one gh search scope (owner or repository filters)."""
     cmd = [
         "gh-as-bot",
@@ -136,7 +145,7 @@ def search_scope(scope: list[str], limit: int, *, oldest: bool, window: int) -> 
         "--limit",
         str(search_window(limit, window)),
         "--sort",
-        "created",
+        search_sort(sort, oldest=oldest),
         "--order",
         "asc" if oldest else "desc",
         "--json",
@@ -151,16 +160,16 @@ def search_scope(scope: list[str], limit: int, *, oldest: bool, window: int) -> 
 
 
 def search_candidates(
-    owners: list[str], repos: list[str], limit: int, *, oldest: bool = False, window: int = 0
+    owners: list[str], repos: list[str], limit: int, *, oldest: bool = False, window: int = 0, sort: str = ""
 ) -> list[Candidate]:
     """Enumerate open PRs for the union of owners and explicit repositories."""
     found: dict[tuple[str, int], Candidate] = {}
     for owner in owners:
-        for cand in search_scope(["--owner", owner], limit=limit, oldest=oldest, window=window):
+        for cand in search_scope(["--owner", owner], limit=limit, oldest=oldest, window=window, sort=sort):
             found[cand.repo, cand.number] = cand
     if repos:
         scope = [arg for repo in repos for arg in ("-R", repo)]
-        for cand in search_scope(scope, limit=limit, oldest=oldest, window=window):
+        for cand in search_scope(scope, limit=limit, oldest=oldest, window=window, sort=sort):
             found[cand.repo, cand.number] = cand
     return list(found.values())
 
@@ -475,6 +484,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--list", action="store_true", help="print the selected PRs and exit without reviewing")
     parser.add_argument("--oldest", action="store_true", help="sweep the oldest open PRs instead of the newest")
     parser.add_argument(
+        "--sort",
+        choices=SEARCH_SORTS,
+        default="",
+        help=f"search window order, 'asc' or 'desc' follows --oldest (default: {DEFAULT_SORT})",
+    )
+    parser.add_argument(
         "--window", type=int, default=0, help="open PRs to search before filtering (default: 10x limit, min 50)"
     )
     parser.add_argument(
@@ -571,7 +586,7 @@ def run_cycle(args: argparse.Namespace) -> int:
     login = bot_login()
     window = search_window(args.limit, args.window)
     try:
-        found = search_candidates(owners, args.repos, args.limit, oldest=args.oldest, window=window)
+        found = search_candidates(owners, args.repos, args.limit, oldest=args.oldest, window=window, sort=args.sort)
     except (RuntimeError, OSError, ValueError) as err:
         print(f"search failed: {err}", file=sys.stderr)
         return 1
@@ -588,7 +603,8 @@ def run_cycle(args: argparse.Namespace) -> int:
     if not candidates:
         end = "oldest" if args.oldest else "newest"
         print(
-            f"no reviewable PRs among the {end} {window} open PRs for {', '.join(args.repos or owners)}",
+            f"no reviewable PRs among the {end} {window} open PRs by "
+            f"{search_sort(args.sort, oldest=args.oldest)} for {', '.join(args.repos or owners)}",
             file=sys.stderr,
         )
         if not args.oldest:
