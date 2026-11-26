@@ -15,6 +15,14 @@ def sut(load_script):
     return load_script("review-bot-batch")
 
 
+@pytest.fixture(autouse=True)
+def cache(sut, mocker, tmp_path):
+    """Point every ledger of a test at a temporary cache, never at ~/.cache/review-bot."""
+    target = tmp_path / "cache"
+    mocker.patch.object(sut, "cache_dir", return_value=target)
+    return target
+
+
 def make_candidate(sut, *, number=1, repo="os-autoinst/openQA", author="okurz", draft=False, created="2026-01-01"):
     return sut.Candidate(
         repo=repo,
@@ -728,15 +736,13 @@ def test_main_reports_a_census_of_prs_that_owe_nothing(sut, mocker, capsys):
     assert "nothing owed" in err
 
 
-def patch_cycle(sut, mocker, facts, *, checkouts=None, skip_cache=None):
+def patch_cycle(sut, mocker, facts, *, checkouts=None):
     """Wire one cycle to a fixed census and cutoff so a test decides what the bot owes."""
     mocker.patch.object(sut, "bot_login", return_value="bot")
     mocker.patch.object(sut, "fetch_census", return_value=facts)
     mocker.patch.object(sut, "stamp_days_ago", return_value=CUTOFF)
     if checkouts is not None:
         mocker.patch.object(sut, "discover_checkouts", return_value=checkouts)
-    if skip_cache is not None:
-        mocker.patch.object(sut, "cache_dir", return_value=skip_cache)
 
 
 def test_main_requires_a_scope(sut, mocker, capsys):
@@ -785,15 +791,13 @@ def test_main_counts_a_posted_review_after_a_timeout_as_ok(sut, tmp_path, mocker
 
 
 def test_main_counts_a_skipped_session_as_ok_and_records_the_head(sut, tmp_path, mocker, capsys):
-    patch_cycle(
-        sut, mocker, [make_facts(sut, head="abc123")], checkouts={"os-autoinst/openQA": tmp_path}, skip_cache=tmp_path
-    )
+    patch_cycle(sut, mocker, [make_facts(sut, head="abc123")], checkouts={"os-autoinst/openQA": tmp_path})
     mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=True, skipped=True, log="/log/1"))
     mocker.patch.object(sut, "pr_state", side_effect=AssertionError("a skip needs no API lookup"))
     code = sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
     assert code == 0
     assert "skip  os-autoinst/openQA#1" in capsys.readouterr().err
-    assert sut.load_skips(tmp_path / "skipped.json") == {"os-autoinst/openQA#1": "abc123"}
+    assert sut.load_skips(tmp_path / "cache" / "skipped.json") == {"os-autoinst/openQA#1": "abc123"}
 
 
 def test_main_marks_an_unposted_session_as_failed(sut, tmp_path, mocker, capsys):
@@ -889,3 +893,79 @@ def test_select_owed_holds_the_reserves_back_from_a_flood_of_urgent_work(sut):
     selected = [cand.number for cand in sut.select_owed(candidates, owed, 12)]
     assert len(selected) == 12
     assert selected[-2:] == [30, 40]
+
+
+def test_latency_targets_are_pinned(sut):
+    assert sut.LATENCY_TARGETS == {"C1": 3600.0, "C2": 14400.0, "C3": 86400.0}
+    assert pytest.approx(2.0) == sut.C4_PER_CYCLE
+    assert sut.WAIT_RETENTION_DAYS == 7
+
+
+def wait_row(sut, seconds, *, cycle="c", class_name="C1", stamp="2026-11-25T00:00:00Z"):
+    return sut.Wait(stamp, cycle, class_name, seconds)
+
+
+def test_breaches_names_the_classes_that_miss_a_target(sut):
+    waits = [
+        wait_row(sut, 7200.0),
+        wait_row(sut, 600.0, class_name="C2"),
+        wait_row(sut, 30.0, class_name="C4"),
+    ]
+    assert sut.breaches(waits) == ["C1 max wait 2h exceeds 1h", "C4 serves 1.0 per cycle, target 2"]
+
+
+def test_breaches_holds_when_every_class_meets_its_target(sut):
+    waits = [
+        wait_row(sut, 3600.0),
+        wait_row(sut, 14400.0, class_name="C2"),
+        wait_row(sut, 86400.0, class_name="C3"),
+        *(wait_row(sut, 60.0, class_name="C4", cycle=f"cycle-{index % 2}") for index in range(4)),
+    ]
+    assert sut.breaches(waits) == []
+
+
+def test_breaches_refuses_to_pass_an_empty_sample(sut):
+    assert sut.breaches([]) == ["no ledger rows in the retention window"]
+
+
+def write_wait_ledger(path: Path, *rows: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ledger = "# v2 stamp,repo,number,cycle,class,owed_since,wait_seconds\n" + "\n".join(rows) + "\n"
+    path.write_text(ledger, encoding="utf-8")
+
+
+def test_main_latency_report_fails_on_a_breach(sut, cache, capsys):
+    write_wait_ledger(
+        cache / "waits.csv",
+        "2026-11-25T00:00:00Z,os-autoinst/openQA,7779,cycle-1,C1,2026-11-20T00:00:00Z,432000",
+    )
+    assert sut.main(["--latency-report"]) == 1
+    err = capsys.readouterr().err
+    assert "waits 7d: C1 max 5d" in err
+    assert "breach: C1 max wait 5d exceeds 1h" in err
+
+
+def test_main_latency_report_passes_a_sample_within_targets(sut, cache, capsys):
+    write_wait_ledger(
+        cache / "waits.csv",
+        "2026-11-25T00:00:00Z,os-autoinst/openQA,1,cycle-1,C1,2026-11-25T00:00:00Z,60",
+        "2026-11-25T00:00:00Z,os-autoinst/openQA,2,cycle-1,C4,2026-11-25T00:00:00Z,60",
+        "2026-11-25T00:00:00Z,os-autoinst/openQA,3,cycle-1,C4,2026-11-25T00:00:00Z,60",
+    )
+    assert sut.main(["--latency-report"]) == 0
+    assert "breach" not in capsys.readouterr().err
+
+
+def test_main_latency_report_rejects_a_watch_run(sut, capsys):
+    assert sut.main(["--latency-report", "--watch"]) == 2
+    assert "--latency-report cannot be combined" in capsys.readouterr().err
+
+
+def test_main_reports_the_latency_after_a_cycle(sut, tmp_path, mocker, capsys):
+    patch_cycle(sut, mocker, [make_facts(sut)], checkouts={"os-autoinst/openQA": tmp_path})
+    mocker.patch.object(sut, "run_review", return_value=make_outcome(sut, ok=True, log="/log/1"))
+    mocker.patch.object(sut, "pr_state", return_value=make_state(sut, reviewed_on_head=True))
+    sut.main(["--owner", "os-autoinst", "--limit", "1", "--log-dir", str(tmp_path / "logs")])
+    err = capsys.readouterr().err
+    assert "waits 7d: C1 none" in err
+    assert "C3 max" in err

@@ -55,6 +55,8 @@ FRESH_DAYS = 14
 CLASS_ORDER = ("C1", "C2", "C3", "C4", "C5")
 CLASS_RESERVES = {"C3": 1, "C4": 2}
 LATENCY_CLASSES = ("C1", "C2", "C3", "C4")
+LATENCY_TARGETS = {"C1": 3600.0, "C2": 4 * 3600.0, "C3": 86400.0}
+C4_PER_CYCLE = 2.0
 CENSUS_QUERY = """query($q: String!, $cursor: String) {
   search(query: $q, type: ISSUE, first: 100, after: $cursor) {
     pageInfo { hasNextPage endCursor }
@@ -467,6 +469,37 @@ def latency_report(waits: list[Wait]) -> str:
     return " · ".join(parts)
 
 
+def breaches(waits: list[Wait], *, targets: dict[str, float] | None = None) -> list[str]:
+    """Name every class that misses its target, and the empty sample that proves nothing."""
+    targets = LATENCY_TARGETS if targets is None else targets
+    if not waits:
+        return ["no ledger rows in the retention window"]
+    problems = []
+    for class_name, target in targets.items():
+        summary = latency(waits, class_name)
+        if summary and summary.max_seconds > target:
+            problems.append(f"{class_name} max wait {format_wait(summary.max_seconds)} exceeds {format_wait(target)}")
+    served = throughput(waits, "C4")
+    if served < C4_PER_CYCLE:
+        problems.append(f"C4 serves {served:.1f} per cycle, target {C4_PER_CYCLE:.0f}")
+    return problems
+
+
+def report_waits(cache: Path, *, since_days: int = WAIT_RETENTION_DAYS) -> list[Wait]:
+    """Print the latency summary of the ledger window and return the rows behind it."""
+    waits = load_waits(cache / WAITS_FILE, since_days=since_days)
+    print(f"waits {since_days}d: {latency_report(waits)}", file=sys.stderr)
+    return waits
+
+
+def latency_gate(args: argparse.Namespace) -> int:
+    """Report the ledger and fail when a class misses its target: the check a timer runs."""
+    problems = breaches(report_waits(cache_dir(args), since_days=args.since_days))
+    for problem in problems:
+        print(f"breach: {problem}", file=sys.stderr)
+    return 1 if problems else 0
+
+
 def parse_shard(value: str) -> tuple[int, int]:
     """Parse ``i/n`` into a one-based shard index and its count."""
     match = re.fullmatch(r"(\d+)/(\d+)", value.strip())
@@ -742,6 +775,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--list", action="store_true", help="print the selected PRs and exit without reviewing")
     parser.add_argument(
+        "--latency-report",
+        action="store_true",
+        help="print the latency ledger and exit non-zero when a class misses its target",
+    )
+    parser.add_argument(
+        "--since-days", type=int, default=WAIT_RETENTION_DAYS, help="ledger window to report on (default: 7)"
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=DEFAULT_TIMEOUT,
@@ -909,6 +950,7 @@ def run_cycle(args: argparse.Namespace) -> int:
     print(f"{len(selected)} PR(s), mode={mode}, reviewer={login}", file=sys.stderr)
     failures = review_selected(selected, owed, found, args=args, login=login, skips=skips, cache=cache)
     print(f"done: {len(selected) - failures} ok, {failures} failed", file=sys.stderr)
+    report_waits(cache)
     return 1 if failures else 0
 
 
@@ -930,6 +972,11 @@ def pause(seconds: float) -> None:
 def main(argv: list[str] | None = None) -> int:
     """Run one batch, or watch cycles with a fresh log directory each time."""
     args = parse_args(argv)
+    if args.latency_report and (args.watch or args.list):
+        print("error: --latency-report cannot be combined with --watch or --list", file=sys.stderr)
+        return 2
+    if args.latency_report:
+        return latency_gate(args)
     if args.watch and args.list:
         print("error: --watch and --list cannot be combined", file=sys.stderr)
         return 2
