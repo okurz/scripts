@@ -368,6 +368,12 @@ def test_session_env_marks_the_run_unattended(sut, mocker, apply, present):
     assert ("PR_SWEEP_APPLY" in env) is present
 
 
+def test_session_env_drops_the_parent_session_identity(sut, mocker):
+    mocker.patch.dict("os.environ", {"PI_SESSION_FILE": "/tmp/parent.jsonl", "PI_MODEL": "m"}, clear=True)
+    env = sut.session_env(make_pr(sut), apply=False, jobs=1)
+    assert set(env).isdisjoint(sut.PARENT_SESSION_VARS)
+
+
 def test_session_env_gives_parallel_sessions_their_own_cluster(sut, mocker):
     mocker.patch.dict("os.environ", {}, clear=True)
     env = sut.session_env(make_pr(sut, number=8141), apply=False, jobs=2)

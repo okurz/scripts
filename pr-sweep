@@ -41,6 +41,7 @@ TIMEOUT_EXIT = 124
 FAILED_STATES = frozenset({"FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"})
 GITHUB_REMOTE = re.compile(r"github\.com[:/]([^/]+/[^/.]+)")
 PR_FIELDS = "number,title,headRefName,headRefOid,isDraft,reviewDecision,statusCheckRollup,url"
+PARENT_SESSION_VARS = ("PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL")
 UNUSABLE = {
     "dirty": "the worktree has uncommitted changes",
     "behind": "the worktree lacks commits of the PR head",
@@ -244,7 +245,7 @@ def session_command(pr: Pr, worktree: Worktree, *, runner: str, model: str, appl
 
 def session_env(pr: Pr, *, apply: bool, jobs: int) -> dict[str, str]:
     """Return the session environment: unattended, and its own test cluster when running in parallel."""
-    env = dict(os.environ)
+    env = {name: value for name, value in os.environ.items() if name not in PARENT_SESSION_VARS}
     env["PR_SWEEP"] = "1"
     env.pop("PR_SWEEP_APPLY", None)
     if apply:
