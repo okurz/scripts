@@ -135,7 +135,8 @@ def test_fetch_prs_queries_my_open_prs(sut, fake_subprocess):
     assert cmd[cmd.index("--limit") + 1] == "5"
 
 
-def test_fetch_prs_reports_a_gh_failure(sut, fake_subprocess):
+def test_fetch_prs_reports_a_gh_failure(sut, fake_subprocess, mocker):
+    mocker.patch.object(sut, "pause")
     fake_subprocess.on(["gh", "pr", "list"], stderr="boom", returncode=1)
     with pytest.raises(RuntimeError, match="boom"):
         sut.fetch_prs("o/r", limit=5, author="@me")
@@ -181,6 +182,32 @@ def test_fetch_selected_reports_an_unparsable_answer(sut, fake_subprocess):
     fake_subprocess.on(["gh", "pr", "view", "7"], stdout="")
     with pytest.raises(RuntimeError, match="gh pr view 7 returned no JSON"):
         sut.fetch_selected("o/r", [7], author="@me")
+
+
+def test_pause_returns_immediately_for_zero_seconds(sut):
+    assert sut.pause(0) is None
+
+
+def test_fetch_prs_retries_a_flaky_api_answer(sut, mocker):
+    wait = mocker.patch.object(sut, "pause")
+    payload = json.dumps([{"number": 7, "headRefName": "b"}])
+    mocker.patch(
+        "subprocess.run",
+        side_effect=[
+            subprocess.CompletedProcess([], 1, "", "HTTP 504"),
+            subprocess.CompletedProcess([], 0, payload, ""),
+        ],
+    )
+    assert [pr.number for pr in sut.fetch_prs("o/r", limit=5, author="@me")] == [7]
+    wait.assert_called_once_with(15.0)
+
+
+def test_fetch_prs_gives_up_after_the_last_attempt(sut, mocker):
+    wait = mocker.patch.object(sut, "pause")
+    mocker.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "HTTP 504"))
+    with pytest.raises(RuntimeError, match="HTTP 504"):
+        sut.fetch_prs("o/r", limit=5, author="@me")
+    assert [call.args[0] for call in wait.call_args_list] == [15.0, 45.0]
 
 
 def test_fetch_prs_reports_an_unparsable_answer(sut, fake_subprocess):

@@ -36,6 +36,8 @@ DEFAULT_AUTHOR = "@me"
 DEFAULT_LIMIT = 50
 DEFAULT_TIMEOUT = 3600.0
 DEFAULT_JOBS = 1
+GH_ATTEMPTS = 3
+GH_RETRY_WAITS = (15.0, 45.0)
 TEST_DB_ROOT = "/dev/shm"
 TIMEOUT_EXIT = 124
 FAILED_STATES = frozenset({"FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"})
@@ -60,6 +62,11 @@ def run(
 ) -> subprocess.CompletedProcess[str]:
     """Run a command to completion and return its result."""
     return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, check=False)
+
+
+def pause(seconds: float) -> None:
+    """Wait between attempts; the seam keeps tests off the clock."""
+    time.sleep(seconds)
 
 
 def cache_dir(args: argparse.Namespace) -> Path:
@@ -186,8 +193,8 @@ def fetch_selected(repo: str, numbers: list[int], *, author: str) -> list[Pr]:
 
 
 def fetch_prs(repo: str, *, limit: int, author: str) -> list[Pr]:
-    """Return the open PRs authored by author, newest first."""
-    res = run([
+    """Return the open PRs authored by author, newest first, retrying a flaky API answer."""
+    cmd = [
         "gh",
         "pr",
         "list",
@@ -201,10 +208,16 @@ def fetch_prs(repo: str, *, limit: int, author: str) -> list[Pr]:
         str(limit),
         "--json",
         PR_FIELDS,
-    ])
-    if res.returncode != 0:
-        raise RuntimeError(res.stderr.strip() or f"gh pr list exited {res.returncode}")
-    return [make_pr(repo, entry) for entry in load_pr_list(res.stdout, "gh pr list")]
+    ]
+    reason = ""
+    for attempt in range(GH_ATTEMPTS):
+        res = run(cmd)
+        if res.returncode == 0:
+            return [make_pr(repo, entry) for entry in load_pr_list(res.stdout, "gh pr list")]
+        reason = res.stderr.strip() or f"gh pr list exited {res.returncode}"
+        if attempt < len(GH_RETRY_WAITS):
+            pause(GH_RETRY_WAITS[attempt])
+    raise RuntimeError(reason)
 
 
 def owes_an_answer(pr: Pr, *, everything: bool) -> bool:
