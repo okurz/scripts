@@ -674,12 +674,15 @@ def review_command(
     return ["pi", *flags, "-p", f"/review-as-bot {cand.url} {mode}{suffix}"]
 
 
-def runner_env(*, dry_run: bool) -> dict[str, str]:
+def runner_env(*, dry_run: bool, report: Path | None = None) -> dict[str, str]:
     """Environment for the nested runner; the as-bot wrappers refuse writes without REVIEW_BOT_POST."""
     env = dict(os.environ)
     env.pop("REVIEW_BOT_POST", None)
+    env.pop("REVIEW_BOT_REPORT", None)
     if not dry_run:
         env["REVIEW_BOT_POST"] = "1"
+        if report is not None:
+            env["REVIEW_BOT_REPORT"] = str(report)
     return env
 
 
@@ -727,7 +730,7 @@ def run_review(
             res = subprocess.run(
                 cmd,
                 cwd=checkout,
-                env=runner_env(dry_run=dry_run),
+                env=runner_env(dry_run=dry_run, report=log_dir / f"{cand.slug}.report.md"),
                 stdout=handle,
                 stderr=subprocess.STDOUT,
                 check=False,

@@ -1196,3 +1196,23 @@ def test_review_candidate_reports_why_the_confirmation_failed(sut, tmp_path, moc
     err = capsys.readouterr().err
     assert "FAILED  os-autoinst/openQA#1" in err
     assert "review not visible on abc123" in err
+
+
+def test_runner_env_keeps_the_report_next_to_the_log(sut, monkeypatch, tmp_path):
+    monkeypatch.delenv("REVIEW_BOT_REPORT", raising=False)
+    report = tmp_path / "os-autoinst-openQA-1.report.md"
+    assert sut.runner_env(dry_run=False, report=report)["REVIEW_BOT_REPORT"] == str(report)
+
+
+def test_runner_env_leaves_the_report_path_out_of_dry_runs(sut, monkeypatch, tmp_path):
+    monkeypatch.setenv("REVIEW_BOT_REPORT", "/tmp/from-the-outer-shell.report.md")
+    env = sut.runner_env(dry_run=True, report=tmp_path / "os-autoinst-openQA-1.report.md")
+    assert "REVIEW_BOT_REPORT" not in env
+
+
+def test_run_review_points_the_report_at_the_log_dir(sut, tmp_path, mocker):
+    mocker.patch.object(sut, "fetch_pr_head")
+    proc = mocker.patch.object(sut.subprocess, "run", return_value=MagicMock(returncode=0))
+    cand = make_candidate(sut)
+    sut.run_review(cand, tmp_path, dry_run=False, log_dir=tmp_path, timeout=5)
+    assert proc.call_args.kwargs["env"]["REVIEW_BOT_REPORT"] == str(tmp_path / f"{cand.slug}.report.md")
