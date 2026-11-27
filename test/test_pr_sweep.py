@@ -13,11 +13,11 @@ def sut(load_script):
     return load_script("pr-sweep")
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def cache(sut, mocker, tmp_path):
     """Point every ledger of a test at a temporary cache, never at ~/.cache/pr-sweep."""
     target = tmp_path / "cache"
-    mocker.patch.object(sut, "cache_dir", return_value=target)
+    mocker.patch.object(sut, "DEFAULT_CACHE", target)
     return target
 
 
@@ -73,6 +73,14 @@ def args(**overrides: object) -> argparse.Namespace:
 )
 def test_parse_github_repo(sut, url, expected):
     assert sut.parse_github_repo(url) == expected
+
+
+def test_cache_dir_takes_the_option(sut, tmp_path):
+    assert sut.cache_dir(argparse.Namespace(cache=str(tmp_path))) == tmp_path
+
+
+def test_cache_dir_defaults_to_the_temporary_cache(sut, cache):
+    assert sut.cache_dir(args()) == cache
 
 
 def test_slug_names_the_repository_and_number(sut):
