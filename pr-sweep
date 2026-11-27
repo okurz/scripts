@@ -233,6 +233,7 @@ def session_command(pr: Pr, worktree: Worktree, *, runner: str, model: str, appl
             "run",
             "--dir",
             str(worktree.path),
+            *(["--auto"] if apply else []),
             *model_flags(model, "-m"),
             "--command",
             "pr-watch",
@@ -376,7 +377,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--runner", choices=("pi", "opencode"), default="pi", help="nested session runner (default: pi)"
     )
     parser.add_argument("--model", default="", help="model for the nested session")
-    parser.add_argument("--apply", action="store_true", help="let the nested session fix, verify, commit and push")
+    parser.add_argument(
+        "--apply", action="store_true", help="let the nested session fix, verify, commit and push (implies --run)"
+    )
     parser.add_argument(
         "--timeout", type=float, default=DEFAULT_TIMEOUT, help=f"seconds per session (default: {DEFAULT_TIMEOUT:.0f})"
     )
@@ -391,6 +394,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     """Audit, prepare or sweep the own open PRs that owe an answer."""
     args = parse_args(argv)
+    if args.apply:
+        args.run = True
     if args.prepare and args.run:
         print("error: --prepare and --run are mutually exclusive", file=sys.stderr)
         return 2

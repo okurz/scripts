@@ -314,9 +314,12 @@ def test_session_command_passes_the_model_and_apply_to_pi(sut, tmp_path):
     ]
 
 
-@pytest.mark.parametrize(("model", "flags"), [("", []), ("m", ["-m", "m"])])
-def test_session_command_runs_opencode_in_the_worktree(sut, tmp_path, model, flags):
-    cmd = sut.session_command(make_pr(sut), worktree(sut, tmp_path), runner="opencode", model=model, apply=False)
+@pytest.mark.parametrize(
+    ("model", "apply", "flags"),
+    [("", False, []), ("m", False, ["-m", "m"]), ("", True, ["--auto"])],
+)
+def test_session_command_runs_opencode_in_the_worktree(sut, tmp_path, model, apply, flags):
+    cmd = sut.session_command(make_pr(sut), worktree(sut, tmp_path), runner="opencode", model=model, apply=apply)
     assert cmd == [
         "opencode",
         "run",
@@ -325,7 +328,7 @@ def test_session_command_runs_opencode_in_the_worktree(sut, tmp_path, model, fla
         *flags,
         "--command",
         "pr-watch",
-        "https://github.com/os-autoinst/openQA/pull/8141 --cycles 1",
+        f"https://github.com/os-autoinst/openQA/pull/8141 --cycles 1{' --auto' if apply else ''}",
     ]
 
 
@@ -450,6 +453,19 @@ def test_main_audits_the_prs_that_owe_an_answer(sut, mocker, capsys):
     mocker.patch.object(sut, "fetch_prs", return_value=[make_pr(sut, decision="CHANGES_REQUESTED")])
     assert sut.main([]) == 0
     assert "CHANGES_REQUESTED" in capsys.readouterr().out
+
+
+def test_main_lets_apply_imply_a_run(sut, mocker):
+    mocker.patch.object(sut, "infer_repo", return_value="o/r")
+    mocker.patch.object(sut, "fetch_prs", return_value=[make_pr(sut, decision="CHANGES_REQUESTED")])
+    sweep = mocker.patch.object(sut, "sweep", return_value=0)
+    assert sut.main(["--apply"]) == 0
+    assert sweep.call_args.args[1].run is True
+
+
+def test_main_rejects_apply_together_with_prepare(sut, capsys):
+    assert sut.main(["--prepare", "--apply"]) == 2
+    assert "mutually exclusive" in capsys.readouterr().err
 
 
 def test_main_prepares_the_worktrees(sut, mocker):
