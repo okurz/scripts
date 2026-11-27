@@ -10,7 +10,7 @@ cre="${cre:-"podman"}"
 #shellcheck disable=SC2086
 $cre run -it --rm "$container" sh -c " \
 rm -f /usr/lib/zypp/plugins/services/container-suseconnect*
-for i in $(echo $repos); do zypper -q -n ar -fGC $repo_base\$i \${i%%/}; done
+for i in $repos; do zypper -q -n ar -fGC $repo_base\$i \${i%%/}; done
 zypper -n ref
 $cmd
 "

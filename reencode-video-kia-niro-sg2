@@ -23,7 +23,7 @@ for f in *.{mkv,webm,avi,mp4}; do
         "./${filename%.*}_superkia.mp4" < /dev/null &
     
     # Wait if we have reached the maximum number of parallel background jobs
-    while [ $(jobs -p | wc -l) -ge $MAX_JOBS ]; do sleep 1; done
+    while [ "$(jobs -p | wc -l)" -ge "$MAX_JOBS" ]; do sleep 1; done
 done
 
 # Wait for all remaining background jobs to finish

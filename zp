@@ -1,2 +1,2 @@
 #!/bin/sh -e
-sudo zypper $@
+sudo zypper "$@"
