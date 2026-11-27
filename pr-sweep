@@ -328,10 +328,12 @@ def print_outcome(outcome: Outcome) -> None:
 
 
 def select_prs(prs: list[Pr], args: argparse.Namespace) -> list[Pr]:
-    """Return the requested numbers, else the PRs that owe an answer."""
+    """Return the requested numbers, else the PRs that owe an answer, minus the excluded ones."""
     if args.prs:
-        return [pr for pr in prs if pr.number in set(args.prs)]
-    return [pr for pr in prs if owes_an_answer(pr, everything=args.all)]
+        wanted = [pr for pr in prs if pr.number in set(args.prs)]
+    else:
+        wanted = [pr for pr in prs if owes_an_answer(pr, everything=args.all)]
+    return [pr for pr in wanted if pr.number not in set(args.exclude)]
 
 
 def sweep(prs: list[Pr], args: argparse.Namespace) -> int:
@@ -360,13 +362,42 @@ def sweep(prs: list[Pr], args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def pr_numbers(text: str) -> list[int]:
+    """Return the PR numbers of a comma-separated list."""
+    try:
+        return [int(part) for part in text.replace(" ", ",").split(",") if part]
+    except ValueError as err:
+        msg = f"not a comma-separated list of PR numbers: {text}"
+        raise argparse.ArgumentTypeError(msg) from err
+
+
+def flatten(groups: list[list[int]]) -> list[int]:
+    """Return the numbers of the repeated list options."""
+    return [number for group in groups for number in group]
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse the command line."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-R", "--repo", default="", help="owner/repo (default: inferred from origin)")
     parser.add_argument("--author", default=DEFAULT_AUTHOR, help=f"PR author (default: {DEFAULT_AUTHOR})")
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help=f"max PRs to read (default: {DEFAULT_LIMIT})")
-    parser.add_argument("--pr", action="append", type=int, default=[], dest="prs", help="only this PR, repeatable")
+    parser.add_argument(
+        "--pr",
+        action="append",
+        type=pr_numbers,
+        default=[],
+        dest="prs",
+        help="only these PRs, as 3,4,5 or repeated (overrides the feedback selection)",
+    )
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        type=pr_numbers,
+        default=[],
+        dest="exclude",
+        help="skip these PRs, as 1,2 or repeated, e.g. the ones another session already works",
+    )
     parser.add_argument("--all", action="store_true", help="also work drafts and PRs without feedback")
     parser.add_argument("--prepare", action="store_true", help="create the worktrees and stop")
     parser.add_argument("--run", action="store_true", help="run one nested session per PR")
@@ -388,7 +419,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--cache", default="", help=f"ledger directory (default: {DEFAULT_CACHE})")
     parser.add_argument("--log-dir", default="", help="session log directory (default: <cache>/logs)")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    args.prs = flatten(args.prs)
+    args.exclude = flatten(args.exclude)
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:

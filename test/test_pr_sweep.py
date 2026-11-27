@@ -46,6 +46,7 @@ def args(**overrides: object) -> argparse.Namespace:
         "author": "@me",
         "limit": 50,
         "prs": [],
+        "exclude": [],
         "all": False,
         "prepare": False,
         "run": False,
@@ -164,6 +165,33 @@ def test_owes_an_answer(sut, draft, decision, failed, everything, expected):
 def test_select_prs_keeps_only_the_requested_numbers(sut):
     prs = [make_pr(sut, number=1, decision="APPROVED"), make_pr(sut, number=2, decision="APPROVED")]
     assert [pr.number for pr in sut.select_prs(prs, args(prs=[2]))] == [2]
+
+
+def test_select_prs_skips_the_excluded_numbers(sut):
+    prs = [make_pr(sut, number=3, decision="CHANGES_REQUESTED"), make_pr(sut, number=4, decision="CHANGES_REQUESTED")]
+    assert [pr.number for pr in sut.select_prs(prs, args(exclude=[3]))] == [4]
+
+
+def test_select_prs_excludes_even_from_an_explicit_list(sut):
+    prs = [make_pr(sut, number=3, decision="APPROVED"), make_pr(sut, number=4, decision="APPROVED")]
+    assert [pr.number for pr in sut.select_prs(prs, args(prs=[3, 4], exclude=[4]))] == [3]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("3,4,5", [3, 4, 5]), ("3, 4", [3, 4]), ("7", [7])],
+)
+def test_pr_numbers_reads_a_list(sut, text, expected):
+    assert sut.pr_numbers(text) == expected
+
+
+def test_pr_numbers_rejects_a_non_number(sut):
+    with pytest.raises(argparse.ArgumentTypeError, match="not a comma-separated list"):
+        sut.pr_numbers("3,x")
+
+
+def test_flatten_joins_the_repeated_lists(sut):
+    assert sut.flatten([[1, 2], [3]]) == [1, 2, 3]
 
 
 def test_select_prs_keeps_what_owes_an_answer(sut):
@@ -435,6 +463,11 @@ def test_sweep_runs_the_sessions_in_parallel_and_reports_a_failure(sut, tmp_path
 def test_parse_args_defaults_to_the_audit(sut):
     parsed = sut.parse_args([])
     assert (parsed.author, parsed.jobs, parsed.run, parsed.apply) == ("@me", 1, False, False)
+
+
+def test_parse_args_reads_repeated_and_comma_separated_numbers(sut):
+    parsed = sut.parse_args(["--pr", "3,4", "--pr", "5", "--exclude", "1,2"])
+    assert (parsed.prs, parsed.exclude) == ([3, 4, 5], [1, 2])
 
 
 def test_main_rejects_prepare_together_with_run(sut, capsys):
