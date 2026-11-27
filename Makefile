@@ -13,7 +13,7 @@ PYTEST_XDIST := $(shell python3 -c "import xdist" 2>/dev/null && echo "-n auto" 
 
 PY_FILES ?= $(shell git ls-files '*.py')
 PY_SCRIPTS ?= gh-pr-triage gitea-review-cleanup github-all-prs mac-to-ipv6 obs-pr-repair \
-	openqa-db_query_last_use_of_module osc-get-pr-status osc-list-all-unresolvables \
+	openqa-db_query_last_use_of_module osc-get-pr-status pr-sweep osc-list-all-unresolvables \
 	osc-sync-deps osc-sync-leap redmine-fetcher review-bot-batch suse-qa-sle-etherpad-status \
 	git-plans-dir git-worktree-audit
 PY_ALL = $(PY_FILES) $(PY_SCRIPTS)

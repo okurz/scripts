@@ -155,6 +155,7 @@ max-complexity = 9
     "too-many-positional-arguments",
     "undocumented-public-function",
     "boolean-type-hint-positional-argument",
+    "hardcoded-temp-file",
     # the coverage scope guard reads the live pytest-cov data, which only the private API exposes
     "private-member-access",
 ]
@@ -175,6 +176,7 @@ max-complexity = 9
 "mac-to-ipv6" = ["T201"]
 "obs-pr-repair" = ["T201"]
 "redmine-fetcher" = ["T201"]
+"pr-sweep" = ["S108", "T201"]
 "review-bot-batch" = ["T201", "PLR0913"]
 "gh-pr-triage" = ["T201"]
 "osc-list-all-unresolvables" = ["T201"]

@@ -1,0 +1,415 @@
+#!/usr/bin/env python3
+"""Work the reviewer feedback of every own open pull request, one isolated session per PR.
+
+Reads the open pull requests authored by ``--author`` (default ``@me``) and keeps the ones that
+still owe an answer: ``CHANGES_REQUESTED``, or a failing required check. Each PR gets its own git
+worktree so no session stashes or switches another PR's branch: an existing worktree that already
+has the branch checked out is reused, and ``<worktree-root>/<repo>-<number>`` is created from the
+local branch when there is none. Without ``--run`` this only audits; ``--prepare`` creates and
+validates the worktrees; ``--run`` spawns one nested session per usable worktree
+(``pi -p "/pr-watch <url> --cycles 1"``, or ``opencode run --command pr-watch`` with
+``--runner opencode``), tees it to ``<cache>/logs/<slug>.log`` and records the head it worked on
+in ``<cache>/<slug>.json``. A session changes nothing unless ``--apply`` is given, which exports
+``PR_SWEEP_APPLY=1`` for it. ``-j N`` runs N sessions at once; above 1 every session gets its own
+``TEST_PG_PATH`` so openQA's suites do not share one PostgreSQL cluster. A PR that cannot be
+worked is reported with the reason and the sweep continues; the exit code is 1 when any session
+failed.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+DEFAULT_WORKTREE_ROOT = Path.home() / "local" / "worktrees"
+DEFAULT_CACHE = Path.home() / ".cache" / "pr-sweep"
+DEFAULT_AUTHOR = "@me"
+DEFAULT_LIMIT = 50
+DEFAULT_TIMEOUT = 3600.0
+DEFAULT_JOBS = 1
+TEST_DB_ROOT = "/dev/shm"
+TIMEOUT_EXIT = 124
+FAILED_STATES = frozenset({"FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"})
+GITHUB_REMOTE = re.compile(r"github\.com[:/]([^/]+/[^/.]+)")
+PR_FIELDS = "number,title,headRefName,headRefOid,isDraft,reviewDecision,statusCheckRollup,url"
+UNUSABLE = {
+    "dirty": "the worktree has uncommitted changes",
+    "behind": "the worktree lacks commits of the PR head",
+    "branch-missing": "no local branch; fetch it with `git fetch <remote> <branch>:<branch>`",
+}
+
+
+def run(
+    cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run a command to completion and return its result."""
+    return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, check=False)
+
+
+def cache_dir(args: argparse.Namespace) -> Path:
+    """Return the cache directory holding the per-PR ledgers."""
+    return Path(args.cache).expanduser() if args.cache else DEFAULT_CACHE
+
+
+@dataclass(frozen=True)
+class Pr:
+    """One own open pull request and what it still owes."""
+
+    repo: str
+    number: int
+    title: str
+    branch: str
+    head: str
+    url: str
+    draft: bool
+    review_decision: str
+    failed_checks: tuple[str, ...]
+
+    @property
+    def slug(self) -> str:
+        """File-name-safe `<repo>-<number>` identifier."""
+        return f"{self.repo.replace('/', '-')}-{self.number}"
+
+
+@dataclass(frozen=True)
+class Worktree:
+    """Where a PR session runs, and whether that checkout is usable."""
+
+    path: Path
+    state: str
+
+
+@dataclass(frozen=True)
+class Outcome:
+    """How one PR was left: worked, unusable or failed."""
+
+    pr: Pr
+    worktree: Worktree
+    status: str
+    log: Path
+    reason: str = ""
+
+
+def parse_github_repo(url: str) -> str | None:
+    """Return owner/repo of a GitHub remote URL, or None."""
+    match = GITHUB_REMOTE.search(url)
+    return match.group(1) if match else None
+
+
+def infer_repo() -> str:
+    """Return owner/repo of the current checkout's origin, or "" when it has none."""
+    res = run(["git", "remote", "get-url", "origin"])
+    return (parse_github_repo(res.stdout) or "") if res.returncode == 0 else ""
+
+
+def failed_checks(rollup: list[dict[str, Any]]) -> tuple[str, ...]:
+    """Return the names of the checks that concluded in a failing state."""
+    names = []
+    for item in rollup:
+        state = (item.get("conclusion") or item.get("state") or "").upper()
+        if state in FAILED_STATES:
+            names.append(item.get("name") or item.get("context") or "unknown")
+    return tuple(names)
+
+
+def make_pr(repo: str, entry: dict[str, Any]) -> Pr:
+    """Return the PR record of one `gh pr list` entry."""
+    number = int(entry["number"])
+    return Pr(
+        repo=repo,
+        number=number,
+        title=entry.get("title") or "",
+        branch=entry["headRefName"],
+        head=entry.get("headRefOid") or "",
+        url=entry.get("url") or f"https://github.com/{repo}/pull/{number}",
+        draft=bool(entry.get("isDraft")),
+        review_decision=entry.get("reviewDecision") or "",
+        failed_checks=failed_checks(entry.get("statusCheckRollup") or []),
+    )
+
+
+def fetch_prs(repo: str, *, limit: int, author: str) -> list[Pr]:
+    """Return the open PRs authored by author, newest first."""
+    res = run([
+        "gh",
+        "pr",
+        "list",
+        "--repo",
+        repo,
+        "--state",
+        "open",
+        "--author",
+        author,
+        "--limit",
+        str(limit),
+        "--json",
+        PR_FIELDS,
+    ])
+    if res.returncode != 0:
+        raise RuntimeError(res.stderr.strip() or f"gh pr list exited {res.returncode}")
+    try:
+        return [make_pr(repo, entry) for entry in json.loads(res.stdout)]
+    except json.JSONDecodeError as err:
+        msg = f"gh pr list returned no JSON: {err}"
+        raise RuntimeError(msg) from err
+
+
+def owes_an_answer(pr: Pr, *, everything: bool) -> bool:
+    """Return whether a PR still needs a session: changes requested or a failing check."""
+    return not pr.draft and (everything or pr.review_decision == "CHANGES_REQUESTED" or bool(pr.failed_checks))
+
+
+def primary_checkout() -> Path:
+    """Return the main checkout owning the object store of the current repository."""
+    res = run(["git", "worktree", "list", "--porcelain"])
+    if res.returncode != 0 or not res.stdout.strip():
+        raise RuntimeError(res.stderr.strip() or "not inside a git checkout")
+    return Path(res.stdout.splitlines()[0].removeprefix("worktree "))
+
+
+def worktree_entries(primary: Path) -> dict[str, Path]:
+    """Return the branch to path map of every checkout of primary."""
+    res = run(["git", "-C", str(primary), "worktree", "list", "--porcelain"])
+    if res.returncode != 0:
+        raise RuntimeError(res.stderr.strip() or "git worktree list failed")
+    entries: dict[str, Path] = {}
+    path = ""
+    for line in res.stdout.splitlines():
+        if line.startswith("worktree "):
+            path = line.removeprefix("worktree ")
+        elif line.startswith("branch refs/heads/"):
+            entries[line.removeprefix("branch refs/heads/")] = Path(path)
+    return entries
+
+
+def is_dirty(path: Path) -> bool:
+    """Return whether a checkout has staged, modified or untracked files."""
+    return bool(run(["git", "-C", str(path), "status", "--porcelain"]).stdout.strip())
+
+
+def lacks_head(path: Path, head: str) -> bool:
+    """Return whether the PR head has commits the checkout does not contain."""
+    if not head or run(["git", "-C", str(path), "cat-file", "-e", head]).returncode != 0:
+        return False
+    return run(["git", "-C", str(path), "merge-base", "--is-ancestor", head, "HEAD"]).returncode != 0
+
+
+def prepare_worktree(pr: Pr, primary: Path, root: Path) -> Worktree:
+    """Return the worktree of a PR, creating it from its local branch when none has the branch."""
+    path = worktree_entries(primary).get(pr.branch)
+    if path is None:
+        res = run(["git", "-C", str(primary), "rev-parse", "--verify", "--quiet", f"refs/heads/{pr.branch}"])
+        if res.returncode != 0:
+            return Worktree(root / pr.slug, "branch-missing")
+        path = root / pr.slug
+        added = run(["git", "-C", str(primary), "worktree", "add", str(path), pr.branch])
+        if added.returncode != 0:
+            raise RuntimeError(added.stderr.strip() or f"git worktree add failed for {pr.branch}")
+    if is_dirty(path):
+        return Worktree(path, "dirty")
+    return Worktree(path, "behind" if lacks_head(path, pr.head) else "ready")
+
+
+def model_flags(model: str, flag: str) -> list[str]:
+    """Return the flag and model for a runner, empty when no model was chosen."""
+    return [flag, model] if model else []
+
+
+def session_command(pr: Pr, worktree: Worktree, *, runner: str, model: str, apply: bool) -> list[str]:
+    """Build the nested session invocation for one PR."""
+    arguments = f"{pr.url} --cycles 1" + (" --auto" if apply else "")
+    if runner == "opencode":
+        return [
+            "opencode",
+            "run",
+            "--dir",
+            str(worktree.path),
+            *model_flags(model, "-m"),
+            "--command",
+            "pr-watch",
+            arguments,
+        ]
+    return ["pi", *model_flags(model, "--model"), "-p", f"/pr-watch {arguments}"]
+
+
+def session_env(pr: Pr, *, apply: bool, jobs: int) -> dict[str, str]:
+    """Return the session environment: unattended, and its own test cluster when running in parallel."""
+    env = dict(os.environ)
+    env["PR_SWEEP"] = "1"
+    env.pop("PR_SWEEP_APPLY", None)
+    if apply:
+        env["PR_SWEEP_APPLY"] = "1"
+    if jobs > 1 and not env.get("TEST_PG_PATH"):
+        env["TEST_PG_PATH"] = f"{TEST_DB_ROOT}/tpg-sweep-{pr.number}"
+    return env
+
+
+def ledger_path(cache: Path, pr: Pr) -> Path:
+    """Return the per-PR ledger file."""
+    return cache / f"{pr.slug}.json"
+
+
+def write_ledger(cache: Path, pr: Pr, *, status: str, log: Path) -> None:
+    """Record the head a session worked on and how it ended."""
+    path = ledger_path(cache, pr)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "repo": pr.repo,
+        "number": pr.number,
+        "head": pr.head,
+        "status": status,
+        "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "log": str(log),
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def run_logged(cmd: list[str], *, cwd: Path, env: dict[str, str], log: Path, timeout: float) -> int:
+    """Run a session with its combined output in log and return its exit code."""
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("w", encoding="utf-8") as handle:
+        try:
+            return subprocess.run(
+                cmd,
+                cwd=cwd,
+                env=env,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                check=False,
+                timeout=timeout,
+            ).returncode
+        except subprocess.TimeoutExpired:
+            handle.write(f"\n--- PR SWEEP TIMEOUT after {timeout:.0f}s ---\n")
+            return TIMEOUT_EXIT
+
+
+def sweep_one(pr: Pr, worktree: Worktree, args: argparse.Namespace, log_dir: Path) -> Outcome:
+    """Run the session of one prepared PR and record its outcome."""
+    if worktree.state != "ready":
+        return Outcome(pr, worktree, worktree.state, Path(), UNUSABLE[worktree.state])
+    log = log_dir / f"{pr.slug}.log"
+    code = run_logged(
+        session_command(pr, worktree, runner=args.runner, model=args.model, apply=args.apply),
+        cwd=worktree.path,
+        env=session_env(pr, apply=args.apply, jobs=args.jobs),
+        log=log,
+        timeout=args.timeout,
+    )
+    status = "ok" if code == 0 else "failed"
+    write_ledger(cache_dir(args), pr, status=status, log=log)
+    return Outcome(pr, worktree, status, log, "" if code == 0 else f"exit {code}")
+
+
+def print_prs(prs: list[Pr]) -> None:
+    """Print one line per PR that still owes an answer."""
+    print(f"{'PR':>6}  {'REVIEW':18}  {'CHECKS':24}  TITLE")
+    for pr in prs:
+        checks = ",".join(pr.failed_checks) or "-"
+        print(f"{pr.number:>6}  {pr.review_decision or '-':18}  {checks[:24]:24}  {pr.title[:60]}")
+
+
+def print_outcome(outcome: Outcome) -> None:
+    """Print one result line naming the worktree or the reason it was not worked."""
+    detail = str(outcome.log) if outcome.log.name else outcome.reason
+    print(
+        f"{outcome.status:13}  {outcome.pr.repo}#{outcome.pr.number}  {outcome.worktree.path}  {detail}",
+        file=sys.stderr,
+    )
+
+
+def select_prs(prs: list[Pr], args: argparse.Namespace) -> list[Pr]:
+    """Return the requested numbers, else the PRs that owe an answer."""
+    if args.prs:
+        return [pr for pr in prs if pr.number in set(args.prs)]
+    return [pr for pr in prs if owes_an_answer(pr, everything=args.all)]
+
+
+def sweep(prs: list[Pr], args: argparse.Namespace) -> int:
+    """Prepare every worktree serially, then run the sessions, returning a shell exit code."""
+    primary = primary_checkout()
+    root = Path(args.worktree_root).expanduser()
+    log_dir = Path(args.log_dir).expanduser() if args.log_dir else cache_dir(args) / "logs"
+    prepared = [(pr, prepare_worktree(pr, primary, root)) for pr in prs]
+    if not args.run:
+        for pr, worktree in prepared:
+            print(f"{pr.number:>6}  {worktree.state:14}  {worktree.path}")
+        return 0
+    if args.jobs > 1:
+        with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            outcomes = list(pool.map(lambda item: sweep_one(item[0], item[1], args, log_dir), prepared))
+    else:
+        outcomes = [sweep_one(pr, worktree, args, log_dir) for pr, worktree in prepared]
+    for outcome in outcomes:
+        print_outcome(outcome)
+    worked = [outcome for outcome in outcomes if outcome.status == "ok"]
+    failed = [outcome for outcome in outcomes if outcome.status == "failed"]
+    print(
+        f"swept {len(worked)} of {len(outcomes)}, {len(failed)} failed, {len(outcomes) - len(worked) - len(failed)} unusable",
+        file=sys.stderr,
+    )
+    return 1 if failed else 0
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse the command line."""
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("-R", "--repo", default="", help="owner/repo (default: inferred from origin)")
+    parser.add_argument("--author", default=DEFAULT_AUTHOR, help=f"PR author (default: {DEFAULT_AUTHOR})")
+    parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help=f"max PRs to read (default: {DEFAULT_LIMIT})")
+    parser.add_argument("--pr", action="append", type=int, default=[], dest="prs", help="only this PR, repeatable")
+    parser.add_argument("--all", action="store_true", help="also work drafts and PRs without feedback")
+    parser.add_argument("--prepare", action="store_true", help="create the worktrees and stop")
+    parser.add_argument("--run", action="store_true", help="run one nested session per PR")
+    parser.add_argument(
+        "-j", "--jobs", type=int, default=DEFAULT_JOBS, help=f"concurrent sessions (default: {DEFAULT_JOBS})"
+    )
+    parser.add_argument(
+        "--runner", choices=("pi", "opencode"), default="pi", help="nested session runner (default: pi)"
+    )
+    parser.add_argument("--model", default="", help="model for the nested session")
+    parser.add_argument("--apply", action="store_true", help="let the nested session fix, verify, commit and push")
+    parser.add_argument(
+        "--timeout", type=float, default=DEFAULT_TIMEOUT, help=f"seconds per session (default: {DEFAULT_TIMEOUT:.0f})"
+    )
+    parser.add_argument(
+        "--worktree-root", default=str(DEFAULT_WORKTREE_ROOT), help=f"worktree root (default: {DEFAULT_WORKTREE_ROOT})"
+    )
+    parser.add_argument("--cache", default="", help=f"ledger directory (default: {DEFAULT_CACHE})")
+    parser.add_argument("--log-dir", default="", help="session log directory (default: <cache>/logs)")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Audit, prepare or sweep the own open PRs that owe an answer."""
+    args = parse_args(argv)
+    if args.prepare and args.run:
+        print("error: --prepare and --run are mutually exclusive", file=sys.stderr)
+        return 2
+    if args.prepare:
+        args.run = False
+    repo = args.repo or infer_repo()
+    if not repo:
+        print("error: give -R owner/repo or run inside a checkout", file=sys.stderr)
+        return 2
+    try:
+        prs = select_prs(fetch_prs(repo, limit=args.limit, author=args.author), args)
+        if not args.prepare and not args.run:
+            print_prs(prs)
+            return 0
+        return sweep(prs, args)
+    except RuntimeError as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
