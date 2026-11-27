@@ -274,6 +274,23 @@ def test_worktree_entries_reports_a_git_failure(sut, fake_subprocess):
         sut.worktree_entries(Path("/p"))
 
 
+def test_pending_operation_names_the_operation_in_progress(sut, fake_subprocess, tmp_path):
+    fake_subprocess.on(["git", "-C", "/p", "rev-parse", "--git-dir"], stdout=str(tmp_path) + "\n")
+    (tmp_path / "rebase-merge").mkdir()
+    assert sut.pending_operation(Path("/p")) == ("rebase-merge", "git rebase --continue")
+
+
+def test_pending_operation_reports_nothing_on_a_clean_state(sut, fake_subprocess, tmp_path):
+    fake_subprocess.on(["git", "-C", str(tmp_path), "rev-parse", "--git-dir"], stdout=".git\n")
+    (tmp_path / ".git").mkdir()
+    assert sut.pending_operation(tmp_path) == ("", "")
+
+
+def test_pending_operation_reports_nothing_without_a_git_dir(sut, fake_subprocess):
+    fake_subprocess.on(["git", "-C", "/p", "rev-parse", "--git-dir"], returncode=128)
+    assert sut.pending_operation(Path("/p")) == ("", "")
+
+
 def test_is_dirty_sees_uncommitted_changes(sut, fake_subprocess):
     fake_subprocess.on(["git", "-C", "/p", "status", "--porcelain"], stdout=" M file\n")
     assert sut.is_dirty(Path("/p")) is True
@@ -310,6 +327,7 @@ def test_prepare_worktree_reuses_the_checkout_that_has_the_branch(sut, fake_subp
         ["git", "-C", "/p", "worktree", "list", "--porcelain"],
         stdout="worktree /p/topic\nbranch refs/heads/feature/change\n",
     )
+    fake_subprocess.on(["git", "-C", "/p/topic", "rev-parse", "--git-dir"], stdout=str(tmp_path) + "\n")
     fake_subprocess.on(["git", "-C", "/p/topic", "status"], stdout="")
     fake_subprocess.on(["git", "-C", "/p/topic", "cat-file"], returncode=1)
     result = sut.prepare_worktree(make_pr(sut), Path("/p"), tmp_path)
@@ -321,6 +339,9 @@ def test_prepare_worktree_creates_the_worktree_from_the_local_branch(sut, fake_s
     fake_subprocess.on(["git", "-C", "/p", "worktree", "list"], stdout="worktree /p\n")
     fake_subprocess.on(["git", "-C", "/p", "rev-parse", "--verify"], returncode=0)
     fake_subprocess.on(["git", "-C", "/p", "worktree", "add"], returncode=0)
+    fake_subprocess.on(
+        ["git", "-C", "/tmp/wt-root/os-autoinst-openQA-8141", "rev-parse", "--git-dir"], stdout="/p/.git\n"
+    )
     fake_subprocess.on(["git", "-C", "/tmp/wt-root/os-autoinst-openQA-8141", "status"], stdout="")
     fake_subprocess.on(["git", "-C", "/tmp/wt-root/os-autoinst-openQA-8141", "cat-file"], returncode=1)
     result = sut.prepare_worktree(make_pr(sut), Path("/p"), Path("/tmp/wt-root"))
@@ -342,11 +363,26 @@ def test_prepare_worktree_reports_a_failed_worktree_add(sut, fake_subprocess, tm
         sut.prepare_worktree(make_pr(sut), Path("/p"), tmp_path)
 
 
+def test_prepare_worktree_reports_an_unfinished_rebase(sut, fake_subprocess, tmp_path):
+    fake_subprocess.on(
+        ["git", "-C", "/p", "worktree", "list", "--porcelain"],
+        stdout="worktree /p/topic\nbranch refs/heads/feature/change\n",
+    )
+    fake_subprocess.on(["git", "-C", "/p/topic", "rev-parse", "--git-dir"], stdout=str(tmp_path) + "\n")
+    (tmp_path / "rebase-merge").mkdir()
+    result = sut.prepare_worktree(make_pr(sut), Path("/p"), tmp_path)
+    assert (result.state, result.reason) == (
+        "unfinished",
+        "a rebase-merge is in progress; finish it with `git rebase --continue`",
+    )
+
+
 def test_prepare_worktree_reports_a_dirty_checkout(sut, fake_subprocess, tmp_path):
     fake_subprocess.on(
         ["git", "-C", "/p", "worktree", "list", "--porcelain"],
         stdout="worktree /p/topic\nbranch refs/heads/feature/change\n",
     )
+    fake_subprocess.on(["git", "-C", "/p/topic", "rev-parse", "--git-dir"], stdout=str(tmp_path) + "\n")
     fake_subprocess.on(["git", "-C", "/p/topic", "status"], stdout="?? notes\n")
     result = sut.prepare_worktree(make_pr(sut), Path("/p"), tmp_path)
     assert result.state == "dirty"
@@ -357,6 +393,7 @@ def test_prepare_worktree_reports_a_checkout_behind_the_pr_head(sut, fake_subpro
         ["git", "-C", "/p", "worktree", "list", "--porcelain"],
         stdout="worktree /p/topic\nbranch refs/heads/feature/change\n",
     )
+    fake_subprocess.on(["git", "-C", "/p/topic", "rev-parse", "--git-dir"], stdout=str(tmp_path) + "\n")
     fake_subprocess.on(["git", "-C", "/p/topic", "status"], stdout="")
     fake_subprocess.on(["git", "-C", "/p/topic", "cat-file"], returncode=0)
     fake_subprocess.on(["git", "-C", "/p/topic", "merge-base"], returncode=1)
@@ -370,7 +407,7 @@ def test_model_flags_pair_a_model_with_its_runner_flag(sut):
 
 def test_session_command_runs_pi_in_the_worktree(sut, tmp_path):
     cmd = sut.session_command(make_pr(sut), worktree(sut, tmp_path), runner="pi", model="", apply=False)
-    assert cmd == ["pi", "-p", "/pr-watch https://github.com/os-autoinst/openQA/pull/8141 --cycles 1"]
+    assert cmd == ["pi", "--mode", "json", "-p", "/pr-watch https://github.com/os-autoinst/openQA/pull/8141 --cycles 1"]
 
 
 def test_session_command_passes_the_model_and_apply_to_pi(sut, tmp_path):
@@ -379,6 +416,8 @@ def test_session_command_passes_the_model_and_apply_to_pi(sut, tmp_path):
         "pi",
         "--model",
         "m",
+        "--mode",
+        "json",
         "-p",
         "/pr-watch https://github.com/os-autoinst/openQA/pull/8141 --cycles 1 --auto",
     ]
@@ -460,12 +499,20 @@ def test_sweep_one_names_a_failing_session(sut, tmp_path, mocker):
     assert (outcome.status, outcome.reason) == ("failed", "exit 3")
 
 
-@pytest.mark.parametrize("state", ["dirty", "behind", "branch-missing"])
+@pytest.mark.parametrize("state", ["dirty", "behind", "branch-missing", "unfinished"])
 def test_sweep_one_skips_an_unusable_worktree(sut, tmp_path, mocker, state):
     logged = mocker.patch.object(sut, "run_logged")
-    outcome = sut.sweep_one(make_pr(sut), worktree(sut, tmp_path, state), args(), tmp_path)
-    assert (outcome.status, outcome.reason) == (state, sut.UNUSABLE[state])
+    blocked = sut.Worktree(tmp_path / "wt", state, "write it down")
+    outcome = sut.sweep_one(make_pr(sut), blocked, args(), tmp_path)
+    assert (outcome.status, outcome.reason) == (state, "write it down")
     logged.assert_not_called()
+
+
+def test_sweep_one_records_a_timeout_as_its_own_status(sut, cache, tmp_path, mocker):
+    mocker.patch.object(sut, "run_logged", return_value=sut.TIMEOUT_EXIT)
+    outcome = sut.sweep_one(make_pr(sut), worktree(sut, tmp_path), args(), tmp_path)
+    assert (outcome.status, outcome.reason) == ("timeout", f"exit {sut.TIMEOUT_EXIT}")
+    assert json.loads((cache / "os-autoinst-openQA-8141.json").read_text(encoding="utf-8"))["status"] == "timeout"
 
 
 def test_print_prs_names_failing_checks(sut, capsys):

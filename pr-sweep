@@ -42,6 +42,12 @@ FAILED_STATES = frozenset({"FAILURE", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_F
 GITHUB_REMOTE = re.compile(r"github\.com[:/]([^/]+/[^/.]+)")
 PR_FIELDS = "number,title,headRefName,headRefOid,isDraft,reviewDecision,statusCheckRollup,url"
 PARENT_SESSION_VARS = ("PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL")
+PENDING_OPERATIONS = {
+    "rebase-merge": "git rebase --continue",
+    "rebase-apply": "git rebase --continue",
+    "MERGE_HEAD": "git commit",
+    "CHERRY_PICK_HEAD": "git cherry-pick --continue",
+}
 UNUSABLE = {
     "dirty": "the worktree has uncommitted changes",
     "behind": "the worktree lacks commits of the PR head",
@@ -83,10 +89,11 @@ class Pr:
 
 @dataclass(frozen=True)
 class Worktree:
-    """Where a PR session runs, and whether that checkout is usable."""
+    """Where a PR session runs, whether that checkout is usable, and why not."""
 
     path: Path
     state: str
+    reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -228,6 +235,19 @@ def worktree_entries(primary: Path) -> dict[str, Path]:
     return entries
 
 
+def pending_operation(path: Path) -> tuple[str, str]:
+    """Return the git operation a checkout has in progress and the command that finishes it."""
+    res = run(["git", "-C", str(path), "rev-parse", "--git-dir"])
+    if res.returncode != 0 or not res.stdout.strip():
+        return "", ""
+    git_dir = Path(res.stdout.strip())
+    git_dir = git_dir if git_dir.is_absolute() else path / git_dir
+    for marker, resume in PENDING_OPERATIONS.items():
+        if (git_dir / marker).exists():
+            return marker, resume
+    return "", ""
+
+
 def is_dirty(path: Path) -> bool:
     """Return whether a checkout has staged, modified or untracked files."""
     return bool(run(["git", "-C", str(path), "status", "--porcelain"]).stdout.strip())
@@ -251,6 +271,9 @@ def prepare_worktree(pr: Pr, primary: Path, root: Path) -> Worktree:
         added = run(["git", "-C", str(primary), "worktree", "add", str(path), pr.branch])
         if added.returncode != 0:
             raise RuntimeError(added.stderr.strip() or f"git worktree add failed for {pr.branch}")
+    marker, resume = pending_operation(path)
+    if marker:
+        return Worktree(path, "unfinished", f"a {marker} is in progress; finish it with `{resume}`")
     if is_dirty(path):
         return Worktree(path, "dirty")
     return Worktree(path, "behind" if lacks_head(path, pr.head) else "ready")
@@ -276,7 +299,7 @@ def session_command(pr: Pr, worktree: Worktree, *, runner: str, model: str, appl
             "pr-watch",
             arguments,
         ]
-    return ["pi", *model_flags(model, "--model"), "-p", f"/pr-watch {arguments}"]
+    return ["pi", *model_flags(model, "--model"), "--mode", "json", "-p", f"/pr-watch {arguments}"]
 
 
 def session_env(pr: Pr, *, apply: bool, jobs: int) -> dict[str, str]:
@@ -333,7 +356,7 @@ def run_logged(cmd: list[str], *, cwd: Path, env: dict[str, str], log: Path, tim
 def sweep_one(pr: Pr, worktree: Worktree, args: argparse.Namespace, log_dir: Path) -> Outcome:
     """Run the session of one prepared PR and record its outcome."""
     if worktree.state != "ready":
-        return Outcome(pr, worktree, worktree.state, Path(), UNUSABLE[worktree.state])
+        return Outcome(pr, worktree, worktree.state, Path(), worktree.reason or UNUSABLE[worktree.state])
     log = log_dir / f"{pr.slug}.log"
     code = run_logged(
         session_command(pr, worktree, runner=args.runner, model=args.model, apply=args.apply),
@@ -342,9 +365,12 @@ def sweep_one(pr: Pr, worktree: Worktree, args: argparse.Namespace, log_dir: Pat
         log=log,
         timeout=args.timeout,
     )
-    status = "ok" if code == 0 else "failed"
+    if code == 0:
+        write_ledger(cache_dir(args), pr, status="ok", log=log)
+        return Outcome(pr, worktree, "ok", log)
+    status = "timeout" if code == TIMEOUT_EXIT else "failed"
     write_ledger(cache_dir(args), pr, status=status, log=log)
-    return Outcome(pr, worktree, status, log, "" if code == 0 else f"exit {code}")
+    return Outcome(pr, worktree, status, log, f"exit {code}")
 
 
 def print_prs(prs: list[Pr]) -> None:
@@ -390,13 +416,15 @@ def sweep(prs: list[Pr], args: argparse.Namespace) -> int:
         outcomes = [sweep_one(pr, worktree, args, log_dir) for pr, worktree in prepared]
     for outcome in outcomes:
         print_outcome(outcome)
-    worked = [outcome for outcome in outcomes if outcome.status == "ok"]
-    failed = [outcome for outcome in outcomes if outcome.status == "failed"]
+    counts = dict.fromkeys(("ok", "failed", "timeout", "unfinished", "dirty", "behind", "branch-missing"), 0)
+    for outcome in outcomes:
+        counts[outcome.status] += 1
     print(
-        f"swept {len(worked)} of {len(outcomes)}, {len(failed)} failed, {len(outcomes) - len(worked) - len(failed)} unusable",
+        f"swept {counts['ok']} of {len(outcomes)}, {counts['failed']} failed, {counts['timeout']} timed out, "
+        f"{len(outcomes) - counts['ok'] - counts['failed'] - counts['timeout']} unusable",
         file=sys.stderr,
     )
-    return 1 if failed else 0
+    return 1 if counts["failed"] or counts["timeout"] else 0
 
 
 def pr_numbers(text: str) -> list[int]:
