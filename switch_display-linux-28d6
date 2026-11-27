@@ -16,7 +16,7 @@ log() {
     # individual xrandr calls to "cool down" between each call? Disabled to
     # crosscheck again if it happens.
     # No, didn't happen. Maybe the problem is really gone for good
-    echo "$(date +%F-%H-%M-%S): $0: $* $additional_log_arg" >> ${logfile}
+    echo "$(date +%F-%H-%M-%S): $0: $* $additional_log_arg" >> "$logfile"
     sync
 }
 
@@ -41,7 +41,7 @@ log "after xrandr, before kill redundant nm instances"
 # instances
 redundant_nm_instance_pids=$(pgrep -f nm-applet | tail -n +2)
 if [ "$redundant_nm_instance_pids" != "" ]; then
-    kill $redundant_nm_instance_pids
+    for pid in $redundant_nm_instance_pids; do kill "$pid"; done
 fi
 
 log "done"

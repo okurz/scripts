@@ -4,4 +4,4 @@
 words="${words:-2}"
 word_length="${word_length:-5}"
 digits="${digits:-2}"
-xkcdpass -d '-' -n $words --max $word_length | sed "s/-/-${RANDOM:0:$digits}/"
+xkcdpass -d '-' -n "$words" --max "$word_length" | sed "s/-/-${RANDOM:0:$digits}/"
