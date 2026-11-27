@@ -260,6 +260,16 @@ def lacks_head(path: Path, head: str) -> bool:
     return run(["git", "-C", str(path), "merge-base", "--is-ancestor", head, "HEAD"]).returncode != 0
 
 
+def subjects(path: Path, rev_range: str) -> set[str]:
+    """Return the commit subjects of a revision range."""
+    return {line for line in run(["git", "-C", str(path), "log", "--format=%s", rev_range]).stdout.splitlines() if line}
+
+
+def rewritten_ahead(path: Path, head: str) -> bool:
+    """Return whether the branch already carries every commit of the PR head under a rewritten history."""
+    return subjects(path, f"HEAD..{head}") <= subjects(path, f"{head}..HEAD")
+
+
 def prepare_worktree(pr: Pr, primary: Path, root: Path) -> Worktree:
     """Return the worktree of a PR, creating it from its local branch when none has the branch."""
     path = worktree_entries(primary).get(pr.branch)
@@ -276,7 +286,9 @@ def prepare_worktree(pr: Pr, primary: Path, root: Path) -> Worktree:
         return Worktree(path, "unfinished", f"a {marker} is in progress; finish it with `{resume}`")
     if is_dirty(path):
         return Worktree(path, "dirty")
-    return Worktree(path, "behind" if lacks_head(path, pr.head) else "ready")
+    if lacks_head(path, pr.head) and not rewritten_ahead(path, pr.head):
+        return Worktree(path, "behind")
+    return Worktree(path, "ready")
 
 
 def model_flags(model: str, flag: str) -> list[str]:

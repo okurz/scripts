@@ -388,7 +388,8 @@ def test_prepare_worktree_reports_a_dirty_checkout(sut, fake_subprocess, tmp_pat
     assert result.state == "dirty"
 
 
-def test_prepare_worktree_reports_a_checkout_behind_the_pr_head(sut, fake_subprocess, tmp_path):
+def behind_head(sut, fake_subprocess, tmp_path, *, rewritten):
+    """Prepare a worktree whose checkout lacks the PR head, as a rewrite or as a stale tip."""
     fake_subprocess.on(
         ["git", "-C", "/p", "worktree", "list", "--porcelain"],
         stdout="worktree /p/topic\nbranch refs/heads/feature/change\n",
@@ -397,8 +398,19 @@ def test_prepare_worktree_reports_a_checkout_behind_the_pr_head(sut, fake_subpro
     fake_subprocess.on(["git", "-C", "/p/topic", "status"], stdout="")
     fake_subprocess.on(["git", "-C", "/p/topic", "cat-file"], returncode=0)
     fake_subprocess.on(["git", "-C", "/p/topic", "merge-base"], returncode=1)
-    result = sut.prepare_worktree(make_pr(sut), Path("/p"), tmp_path)
-    assert result.state == "behind"
+    head = "a" * 40
+    fresh = "feat: a\nfeat: b" if rewritten else "feat: c"
+    fake_subprocess.on(["git", "-C", "/p/topic", "log", "--format=%s", f"HEAD..{head}"], stdout="feat: a\nfeat: b\n")
+    fake_subprocess.on(["git", "-C", "/p/topic", "log", "--format=%s", f"{head}..HEAD"], stdout=fresh)
+    return sut.prepare_worktree(make_pr(sut), Path("/p"), tmp_path)
+
+
+def test_prepare_worktree_accepts_a_rewritten_head(sut, fake_subprocess, tmp_path):
+    assert behind_head(sut, fake_subprocess, tmp_path, rewritten=True).state == "ready"
+
+
+def test_prepare_worktree_reports_a_checkout_behind_the_pr_head(sut, fake_subprocess, tmp_path):
+    assert behind_head(sut, fake_subprocess, tmp_path, rewritten=False).state == "behind"
 
 
 def test_model_flags_pair_a_model_with_its_runner_flag(sut):
