@@ -28,7 +28,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 DEFAULT_WORKTREE_ROOT = Path.home() / "local" / "worktrees"
 DEFAULT_CACHE = Path.home() / ".cache" / "pr-sweep"
@@ -138,6 +138,46 @@ def make_pr(repo: str, entry: dict[str, Any]) -> Pr:
     )
 
 
+def load_json(text: str, source: str) -> object:
+    """Return the parsed JSON of a gh call, or raise a RuntimeError naming the source."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as err:
+        msg = f"{source} returned no JSON: {err}"
+        raise RuntimeError(msg) from err
+
+
+def load_pr_list(text: str, source: str) -> list[dict[str, Any]]:
+    """Return the PR entries of a gh answer, or raise a RuntimeError naming the source."""
+    return cast("list[dict[str, Any]]", load_json(text, source))
+
+
+def load_pr_entry(text: str, source: str) -> dict[str, Any]:
+    """Return one PR entry of a gh answer, or raise a RuntimeError naming the source."""
+    return cast("dict[str, Any]", load_json(text, source))
+
+
+def viewer_login() -> str:
+    """Return the login of the authenticated user, or "" when gh cannot tell."""
+    res = run(["gh", "api", "user", "--jq", ".login"])
+    return res.stdout.strip() if res.returncode == 0 else ""
+
+
+def fetch_selected(repo: str, numbers: list[int], *, author: str) -> list[Pr]:
+    """Return the named PRs written by author, read one by one instead of the whole census."""
+    login = viewer_login() if author == DEFAULT_AUTHOR else author
+    prs = []
+    for number in sorted(set(numbers)):
+        res = run(["gh", "pr", "view", str(number), "--repo", repo, "--json", f"{PR_FIELDS},author"])
+        if res.returncode != 0:
+            raise RuntimeError(res.stderr.strip() or f"gh pr view {number} exited {res.returncode}")
+        entry = load_pr_entry(res.stdout, f"gh pr view {number}")
+        if login and (entry.get("author") or {}).get("login") != login:
+            continue
+        prs.append(make_pr(repo, entry))
+    return prs
+
+
 def fetch_prs(repo: str, *, limit: int, author: str) -> list[Pr]:
     """Return the open PRs authored by author, newest first."""
     res = run([
@@ -157,11 +197,7 @@ def fetch_prs(repo: str, *, limit: int, author: str) -> list[Pr]:
     ])
     if res.returncode != 0:
         raise RuntimeError(res.stderr.strip() or f"gh pr list exited {res.returncode}")
-    try:
-        return [make_pr(repo, entry) for entry in json.loads(res.stdout)]
-    except json.JSONDecodeError as err:
-        msg = f"gh pr list returned no JSON: {err}"
-        raise RuntimeError(msg) from err
+    return [make_pr(repo, entry) for entry in load_pr_list(res.stdout, "gh pr list")]
 
 
 def owes_an_answer(pr: Pr, *, everything: bool) -> bool:
@@ -441,7 +477,12 @@ def main(argv: list[str] | None = None) -> int:
         print("error: give -R owner/repo or run inside a checkout", file=sys.stderr)
         return 2
     try:
-        prs = select_prs(fetch_prs(repo, limit=args.limit, author=args.author), args)
+        found = (
+            fetch_selected(repo, args.prs, author=args.author)
+            if args.prs
+            else fetch_prs(repo, limit=args.limit, author=args.author)
+        )
+        prs = select_prs(found, args)
         if not args.prepare and not args.run:
             print_prs(prs)
             return 0

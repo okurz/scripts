@@ -141,6 +141,48 @@ def test_fetch_prs_reports_a_gh_failure(sut, fake_subprocess):
         sut.fetch_prs("o/r", limit=5, author="@me")
 
 
+def test_viewer_login_reads_the_authenticated_user(sut, fake_subprocess):
+    fake_subprocess.on(["gh", "api", "user"], stdout="okurz\n")
+    assert sut.viewer_login() == "okurz"
+
+
+def test_viewer_login_is_empty_when_gh_fails(sut, fake_subprocess):
+    fake_subprocess.on(["gh", "api", "user"], returncode=1)
+    assert not sut.viewer_login()
+
+
+def test_fetch_selected_reads_the_named_prs_of_the_viewer(sut, fake_subprocess):
+    fake_subprocess.on(["gh", "api", "user"], stdout="okurz\n")
+    fake_subprocess.on(
+        ["gh", "pr", "view", "8088"],
+        stdout=json.dumps({"number": 8088, "headRefName": "b", "author": {"login": "okurz"}}),
+    )
+    fake_subprocess.on(
+        ["gh", "pr", "view", "8089"],
+        stdout=json.dumps({"number": 8089, "headRefName": "c", "author": {"login": "someone"}}),
+    )
+    assert [pr.number for pr in sut.fetch_selected("o/r", [8089, 8088], author="@me")] == [8088]
+
+
+def test_fetch_selected_keeps_every_named_pr_without_an_author_filter(sut, fake_subprocess):
+    fake_subprocess.on(["gh", "pr", "view", "7"], stdout=json.dumps({"number": 7, "headRefName": "b"}))
+    assert [pr.number for pr in sut.fetch_selected("o/r", [7], author="")] == [7]
+
+
+def test_fetch_selected_reports_a_gh_failure(sut, fake_subprocess):
+    fake_subprocess.on(["gh", "api", "user"], stdout="okurz\n")
+    fake_subprocess.on(["gh", "pr", "view", "7"], stderr="HTTP 504", returncode=1)
+    with pytest.raises(RuntimeError, match="HTTP 504"):
+        sut.fetch_selected("o/r", [7], author="@me")
+
+
+def test_fetch_selected_reports_an_unparsable_answer(sut, fake_subprocess):
+    fake_subprocess.on(["gh", "api", "user"], stdout="okurz\n")
+    fake_subprocess.on(["gh", "pr", "view", "7"], stdout="")
+    with pytest.raises(RuntimeError, match="gh pr view 7 returned no JSON"):
+        sut.fetch_selected("o/r", [7], author="@me")
+
+
 def test_fetch_prs_reports_an_unparsable_answer(sut, fake_subprocess):
     fake_subprocess.on(["gh", "pr", "list"], stdout="not json")
     with pytest.raises(RuntimeError, match="no JSON"):
@@ -505,6 +547,14 @@ def test_main_lets_apply_imply_a_run(sut, mocker):
 def test_main_rejects_apply_together_with_prepare(sut, capsys):
     assert sut.main(["--prepare", "--apply"]) == 2
     assert "mutually exclusive" in capsys.readouterr().err
+
+
+def test_main_reads_named_prs_one_by_one(sut, mocker):
+    mocker.patch.object(sut, "infer_repo", return_value="o/r")
+    mocker.patch.object(sut, "fetch_prs", side_effect=AssertionError("census used"))
+    mocker.patch.object(sut, "fetch_selected", return_value=[make_pr(sut, number=8088)])
+    mocker.patch.object(sut, "sweep", return_value=0)
+    assert sut.main(["--pr", "8088", "--prepare"]) == 0
 
 
 def test_main_prepares_the_worktrees(sut, mocker):
