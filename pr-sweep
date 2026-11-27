@@ -444,7 +444,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--runner", choices=("pi", "opencode"), default="pi", help="nested session runner (default: pi)"
     )
-    parser.add_argument("--model", default="", help="model for the nested session")
+    parser.add_argument(
+        "--model",
+        default=os.environ.get("PR_SWEEP_MODEL", ""),
+        help="model for the nested session (default: $PR_SWEEP_MODEL, else the runner's own default)",
+    )
     parser.add_argument(
         "--apply", action="store_true", help="let the nested session fix, verify, commit and push (implies --run)"
     )

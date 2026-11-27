@@ -513,6 +513,16 @@ def test_parse_args_defaults_to_the_audit(sut):
     assert (parsed.author, parsed.jobs, parsed.run, parsed.apply) == ("@me", 1, False, False)
 
 
+def test_parse_args_takes_the_model_from_the_environment(sut, mocker):
+    mocker.patch.dict("os.environ", {"PR_SWEEP_MODEL": "helmcode/deepseek-v4-flash"}, clear=True)
+    assert sut.parse_args([]).model == "helmcode/deepseek-v4-flash"
+
+
+def test_parse_args_defaults_the_model_to_the_runner(sut, mocker):
+    mocker.patch.dict("os.environ", {}, clear=True)
+    assert not sut.parse_args([]).model
+
+
 def test_parse_args_reads_repeated_and_comma_separated_numbers(sut):
     parsed = sut.parse_args(["--pr", "3,4", "--pr", "5", "--exclude", "1,2"])
     assert (parsed.prs, parsed.exclude) == ([3, 4, 5], [1, 2])
